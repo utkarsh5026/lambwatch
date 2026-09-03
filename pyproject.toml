@@ -27,7 +27,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.15"]
+lint = ["ruff>=0.15"]
 
 [project.scripts]
 lambda-watcher = "lambda_watcher.cli:main"

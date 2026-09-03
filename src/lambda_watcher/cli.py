@@ -28,11 +28,25 @@ from .ingest import Ingestor
 from .store import Store
 from .utils import format_ts, human_size, setup_logging, slugify
 
+# Commands open the index freely and the process normally exits straight
+# after, so nothing closed it. Windows disagrees: an open SQLite handle makes
+# the file undeletable, so `reindex` (which replaces index.db) fails whenever
+# another command ran first in the same process. Closing on command completion
+# keeps that deterministic instead of waiting for the garbage collector.
+_OPEN_DBS: list[Database] = []
+
+
+def _close_open_dbs(*_args: object, **_kwargs: object) -> None:
+    while _OPEN_DBS:
+        _OPEN_DBS.pop().close()
+
+
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
     help="Watch your Downloads folder for Lambda deployment zips, archive every "
     "version, and diff any two of them.",
+    result_callback=_close_open_dbs,
 )
 console = Console()
 err_console = Console(stderr=True)
@@ -49,7 +63,9 @@ def _cfg() -> Config:
 
 
 def _open_db(cfg: Config) -> Database:
-    return Database(cfg.db_path)
+    db = Database(cfg.db_path)
+    _OPEN_DBS.append(db)
+    return db
 
 
 def _fail(message: str, code: int = 1) -> None:

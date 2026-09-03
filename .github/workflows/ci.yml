@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["**"]        # tags are handled by release.yml
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to a branch or PR makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"              # the CLI prints box-drawing characters
+  # FORCE_COLOR is deliberately absent: rich honours it even on the `--json`
+  # code path, and the ANSI codes make `lambda-watcher diff --json` unparseable
+  # (tests/test_cli.py::test_diff_json).
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install lint tooling
+        run: python -m pip install -e ".[lint]"
+
+      # `ruff format` is deliberately not enforced: this codebase uses manual
+      # alignment (the dict literals in ingest.py, the tables in identify.py)
+      # that the formatter would collapse.
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+  test:
+    name: py${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported Python on Linux, plus the oldest and newest on the
+        # other platforms: this is a filesystem watcher, and watchdog, path
+        # handling and file locking are where the OS differences actually bite.
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.10"
+          - os: macos-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.10"
+          - os: windows-latest
+            python: "3.13"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: python -m pip install -e ".[dev]"
+
+      # The git mirror is a real feature (one commit per version, tagged
+      # v0001…), and test_watcher.py exercises it, so git must be usable
+      # non-interactively.
+      - name: Configure git for the mirror tests
+        run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+
+      - name: Run tests
+        run: >-
+          python -m pytest
+          --cov=lambda_watcher
+          --cov-report=xml
+          --cov-report=term-missing:skip-covered
+          --durations=10
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
+
+  build:
+    name: build and verify distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build twine
+          python -m build
+
+      - name: Check metadata
+        run: python -m twine check --strict dist/*
+
+      # Install the built wheel somewhere with no source tree in sight, so a
+      # broken src-layout or a missing entry point cannot pass unnoticed.
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install --quiet dist/*.whl
+          cd /tmp
+          export LAMBDA_WATCHER_HOME=/tmp/smoke-home
+          /tmp/smoke/bin/lambda-watcher --version
+          /tmp/smoke/bin/lw doctor
+          /tmp/smoke/bin/lambda-watcher ls
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Single required check for branch protection: it goes green only when every
+  # matrix leg above did, and it fails on a skipped or cancelled dependency.
+  ci-ok:
+    name: CI
+    if: always()
+    needs: [lint, test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every job succeeded
+        run: |
+          echo "lint:  ${{ needs.lint.result }}"
+          echo "test:  ${{ needs.test.result }}"
+          echo "build: ${{ needs.build.result }}"
+          [ "${{ needs.lint.result }}" = "success" ] \
+            && [ "${{ needs.test.result }}" = "success" ] \
+            && [ "${{ needs.build.result }}" = "success" ]
