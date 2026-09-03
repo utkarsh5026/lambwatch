@@ -1,0 +1,175 @@
+{
+  "editor.fontFamily": "'Source Code Pro', 'CaskaydiaCove Nerd Font Mono', 'CaskaydiaMono Nerd Font', 'Cascadia Code', Consolas, monospace",
+  "editor.fontLigatures": true,
+  "editor.fontSize": 14,
+  "editor.lineHeight": 1.8,
+  "editor.letterSpacing": 0.2,
+  "editor.padding.top": 14,
+  "editor.padding.bottom": 14,
+  "editor.cursorBlinking": "smooth",
+  "editor.cursorSmoothCaretAnimation": "on",
+  "editor.cursorWidth": 2,
+  "editor.smoothScrolling": true,
+  "editor.roundedSelection": true,
+  // Calm chrome: no minimap, hairline scrollbar, highlight the gutter not the line.
+  "editor.minimap.enabled": false,
+  "editor.renderLineHighlight": "gutter",
+  "editor.overviewRulerBorder": false,
+  "editor.hideCursorInOverviewRuler": true,
+  "editor.scrollbar.verticalScrollbarSize": 10,
+  "editor.scrollbar.horizontalScrollbarSize": 10,
+  "editor.scrollBeyondLastLine": false,
+  // Structure you can read at a glance.
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": "active",
+  "editor.guides.indentation": true,
+  "editor.stickyScroll.enabled": true,
+  "editor.stickyScroll.maxLineCount": 3,
+  "editor.renderWhitespace": "boundary",
+  "editor.semanticHighlighting.enabled": true,
+  "breadcrumbs.enabled": true,
+  // ── Workbench ─────────────────────────────────────────────────────────────
+  "workbench.startupEditor": "none",
+  "workbench.list.smoothScrolling": true,
+  "workbench.tree.indent": 14,
+  "workbench.tree.renderIndentGuides": "always",
+  "workbench.editor.labelFormat": "short",
+  "workbench.editor.tabSizing": "shrink",
+  "explorer.compactFolders": false,
+  "explorer.confirmDragAndDrop": false,
+  // Fold the satellite files under the one you actually open.
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "pyproject.toml": "setup.py, setup.cfg, MANIFEST.in, tox.ini, ruff.toml, .python-version, requirements*.txt, *.lock",
+    "README.md": "CLAUDE.md, AGENTS.md, LICENSE, .editorconfig, .gitignore, .gitattributes"
+  },
+  // ── Editor behaviour ──────────────────────────────────────────────────────
+  "editor.formatOnSave": true,
+  // pyproject sets line-length = 110; keep the ruler honest.
+  "editor.rulers": [
+    110
+  ],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  // Error Lens: inline diagnostics that read as a note, not a billboard.
+  "errorLens.fontStyleItalic": true,
+  "errorLens.messageBackgroundMode": "none",
+  "errorLens.gutterIconsEnabled": true,
+  "errorLens.delay": 300,
+  "errorLens.enabledDiagnosticLevels": [
+    "error",
+    "warning"
+  ],
+  // ── Per-language ──────────────────────────────────────────────────────────
+  "[markdown]": {
+    // Prettier was silently re-flowing hand-tuned tables in README.md / docs/ on
+    // every save (padding every cell to column width). The prose here is written
+    // by hand — leave it alone.
+    "editor.formatOnSave": false,
+    "editor.wordWrap": "on",
+    "editor.rulers": [],
+    "editor.renderWhitespace": "none",
+    "editor.quickSuggestions": {
+      "other": false,
+      "comments": false,
+      "strings": false
+    },
+    "files.trimTrailingWhitespace": false
+  },
+  "[python]": {
+    // `ruff format` is deliberately NOT enforced in this repo (see CLAUDE.md):
+    // it would reformat 28 of 36 files, collapsing the manual alignment the
+    // code uses on purpose. Only `ruff check` gates CI, so only fixAll runs.
+    "editor.formatOnSave": false,
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.tabSize": 4,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit"
+    }
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  },
+  // ── Python ────────────────────────────────────────────────────────────────
+  // The package is installed editable into the project venv (`pip install -e .`);
+  // pointing at a system python makes Pylance fail to resolve watchdog/typer/rich.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": false,
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "basic",
+  // 36 source files — whole-workspace analysis is cheap here and catches breakage
+  // in the modules an analysis facet has to be wired through without opening them.
+  "python.analysis.diagnosticMode": "workspace",
+  // src/ layout: resolves `lambda_watcher` even before the venv exists.
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/src"
+  ],
+  // Keep the indexer out of everything that isn't hand-written source.
+  "python.analysis.exclude": [
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.ruff_cache/**",
+    "**/.mypy_cache/**",
+    "**/.pytest_cache/**",
+    "**/htmlcov/**"
+  ],
+  // Mypy is not this repo's type checker — nothing configures or gates on it, so
+  // an installed copy of ms-python.mypy-type-checker only produces diagnostics CI
+  // ignores. The extension has no `enabled` flag; ignoring every .py is its
+  // documented off switch. To remove it outright: Extensions -> Mypy Type Checker
+  // -> Disable (Workspace).
+  "mypy-type-checker.ignorePatterns": [
+    "**/*.py"
+  ],
+  // pyproject's [tool.ruff] is the single source of truth for line-length and
+  // rule selection — don't let editor settings drift from what CI runs.
+  "ruff.configurationPreference": "filesystemFirst",
+  // ── Tests ─────────────────────────────────────────────────────────────────
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "tests"
+  ],
+  // ── Terminal ──────────────────────────────────────────────────────────────
+  "terminal.integrated.cwd": "${workspaceFolder}",
+  // Same Nerd Font as Windows Terminal, so the tmux powerline statusline renders.
+  "terminal.integrated.fontFamily": "'CaskaydiaCove Nerd Font Mono', 'CaskaydiaMono Nerd Font', monospace",
+  "terminal.integrated.fontSize": 13,
+  "terminal.integrated.lineHeight": 1.2,
+  "terminal.integrated.cursorBlinking": true,
+  "terminal.integrated.cursorStyle": "line",
+  "terminal.integrated.smoothScrolling": true,
+  "terminal.integrated.minimumContrastRatio": 4.5,
+  // ── Noise reduction ───────────────────────────────────────────────────────
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/.pytest_cache": true,
+    "**/*.egg-info": true
+  },
+  "files.watcherExclude": {
+    "**/.venv/**": true,
+    "**/build/**": true,
+    "**/dist/**": true,
+    "**/htmlcov/**": true,
+    "**/__pycache__/**": true,
+    "**/.ruff_cache/**": true,
+    "**/.mypy_cache/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/build": true,
+    "**/dist": true,
+    "**/htmlcov": true,
+    "**/__pycache__": true,
+    "**/*.egg-info": true
+  },
+  // Ripgrep already honours .gitignore; make the quick-open picker do the same.
+  "search.useIgnoreFiles": true,
+  "search.followSymlinks": false
+}
