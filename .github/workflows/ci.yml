@@ -19,7 +19,9 @@ permissions:
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONUTF8: "1"              # the CLI prints box-drawing characters
-  FORCE_COLOR: "1"
+  # FORCE_COLOR is deliberately absent: rich honours it even on the `--json`
+  # code path, and the ANSI codes make `lambda-watcher diff --json` unparseable
+  # (tests/test_cli.py::test_diff_json).
 
 jobs:
   lint:
