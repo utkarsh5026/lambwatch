@@ -186,3 +186,18 @@ def test_generated_config_survives_a_windows_style_path(monkeypatch):
     finally:
         monkeypatch.undo()
         reload(templates)
+
+
+def test_commands_leave_no_open_database_handles(archived: Path):
+    """A finished command must not still hold the index open.
+
+    On POSIX a leaked handle is invisible, but Windows refuses to delete an
+    open file — so `reindex`, which replaces index.db, failed there whenever
+    another command had run first in the same process.
+    """
+    from lambda_watcher import cli
+
+    for args in (["ls"], ["versions", "order-processor"], ["show", "order-processor"]):
+        cli_result = _run(*args)
+        assert cli_result.exit_code == 0
+        assert not cli._OPEN_DBS, f"`{' '.join(args)}` left the index open"
