@@ -1,0 +1,118 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+The package is not installed globally; work inside a venv.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"      # pytest, pytest-cov, ruff  (".[lint]" = ruff alone)
+
+.venv/bin/python -m pytest              # full suite (pyproject sets testpaths=tests, -q)
+.venv/bin/python -m pytest tests/test_diff.py::test_diff_reports_code_dependency_env_and_service_changes
+.venv/bin/python -m pytest -k rename    # by name fragment
+
+ruff check .                            # or .venv/bin/ruff; config lives in pyproject
+```
+
+Running the CLI during development: `.venv/bin/lambda-watcher <cmd>` (alias `lw`), or
+`python -m lambda_watcher`. Point `LAMBDA_WATCHER_HOME` at a scratch directory so you never
+touch the real `~/.lambda-watcher` archive while testing.
+
+## Architecture
+
+A zip lands in Downloads → it becomes version *N* of some Lambda function, archived on disk,
+indexed in SQLite, and mirrored into a per-function git repo. Everything else is querying that.
+
+**The ingest pipeline** ([ingest.py](src/lambda_watcher/ingest.py), `Ingestor.ingest`) is the spine, and
+its step order matters: hash the zip → dedupe against `seen_downloads` → identify the function →
+extract safely → analyse → compare tree hash to latest → promote staging to a version directory →
+write `manifest.json` → index in SQLite → commit to git. Each step's failure mode differs: an
+extraction failure quarantines the file, an unchanged tree hash returns without creating a version.
+
+**Disk is the source of truth; `index.db` is derived.** Every version directory holds a complete
+`manifest.json`, and [reindex.py](src/lambda_watcher/reindex.py) rebuilds the whole database from
+those manifests. Never store anything in SQLite that isn't recoverable from a manifest.
+
+**Two hashes, two meanings.** `zip_sha256` is the downloaded file (catches literal re-downloads);
+`tree_hash` is sha256 over sorted `(path, file sha256)` pairs of the extracted tree, and it is what
+decides whether a version is new. Re-downloading the same Lambda produces a different zip but the
+same tree hash — that's the `unchanged` outcome, distinct from `duplicate-download` and `new-version`.
+
+**Vendored vs first-party** is the classification everything downstream depends on. `analysis.vendor_globs`
+marks `node_modules/`, `site-packages/` etc.; diffs hide those files by default and the dependency layer
+explains the churn instead (`boto3 1.34.0 → 1.35.20`). Dependencies are tracked twice — *declared*
+(from `requirements.txt`/`package.json`/`go.mod`) and *installed* (from `*.dist-info/METADATA` and
+vendored `package.json`) — because only the installed version is what actually ran.
+
+### Module layers
+
+| Layer | Files | Role |
+|---|---|---|
+| Config | [config.py](src/lambda_watcher/config.py), [templates.py](src/lambda_watcher/templates.py) | Nested dataclasses, every field defaulted; YAML overlay; `LAMBDA_WATCHER_HOME` / `LAMBDA_WATCHER_CONFIG` env overrides |
+| Intake | [watcher.py](src/lambda_watcher/watcher.py), [ingest.py](src/lambda_watcher/ingest.py), [identify.py](src/lambda_watcher/identify.py), [extract.py](src/lambda_watcher/extract.py) | Watch, wait for stability, name, unpack |
+| Analysis | [analysis/](src/lambda_watcher/analysis/) | One module per facet (runtime, handler, deps, envvars, services, secrets, inventory), composed by `analyse()` |
+| Persistence | [store.py](src/lambda_watcher/store.py), [db.py](src/lambda_watcher/db.py), [gitmirror.py](src/lambda_watcher/gitmirror.py) | Directory layout, SQLite index, git mirror |
+| Presentation | [diffing/](src/lambda_watcher/diffing/), [cli.py](src/lambda_watcher/cli.py) | Compare, render text/HTML, Typer commands |
+
+### Adding an analysis facet touches seven places
+
+This is the main cross-cutting change in the codebase. A new analyser must be wired through:
+`analysis/<name>.py` → `analyse()` and the `Analysis` dataclass → `Analysis.to_manifest()` →
+`db.SCHEMA` plus a `<name>_for()` accessor → `Ingestor._index_version()` (write path) →
+`reindex._insert()` (rebuild path, must produce identical rows) → `diffing/compare.py` and both
+renderers. Skipping `reindex._insert` silently breaks `lambda-watcher reindex`.
+
+### Threading and SQLite
+
+The watchdog observer thread only enqueues paths; one worker thread does all extraction and indexing,
+so there is exactly one SQLite writer. The connection is shared (`check_same_thread=False`) with every
+statement serialised through a re-entrant lock, and `Database.transaction()` holds that lock for the
+whole `BEGIN…COMMIT`. WAL mode lets readers work meanwhile. Preserve this: don't add a second writer.
+
+### Two independent schema versions
+
+`db.SCHEMA_VERSION` (SQLite layout) and `analysis.MANIFEST_SCHEMA` (on-disk manifest format) version
+separately. Changing the manifest shape is the breaking one — old manifests must still reindex.
+
+## Conventions and constraints
+
+- **No AWS API calls, ever.** The tool reads files already on disk, never needs credentials, and works
+  offline. This is a deliberate design boundary, not an oversight.
+- **Extraction is the trust boundary.** [extract.py](src/lambda_watcher/extract.py) refuses path traversal,
+  absolute and drive-letter members, symlinks (stored as regular files), zip bombs (checked from the central
+  directory *and* enforced while streaming), and encrypted archives. Failures go to `quarantine/` with a
+  `.reason.txt` — never silently dropped.
+- Version arguments across the CLI accept `7`, `v7`, `latest`, `first`, `-1`, `-2`; resolution lives in
+  `cli._resolve_seq`. Use it rather than parsing version specs again.
+- Secret findings are stored redacted; the secret value never enters the index.
+- All modules use `from __future__ import annotations` and PEP 604 unions.
+- Ruff ignores `UP045`/`UP007`/`B008` because Typer resolves default-argument calls at import time —
+  don't "fix" `Optional[X] = typer.Option(...)` signatures in [cli.py](src/lambda_watcher/cli.py).
+
+## CI/CD
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on pushes to `main` and PRs: `ruff check`,
+then pytest across Python 3.10-3.13 on Linux plus 3.10/3.13 on macOS and Windows, then a build that
+installs the wheel into a clean venv outside the source tree and smoke-tests the CLI. The `ci-ok` job
+is the aggregate gate to point branch protection at.
+
+- **`ruff format` is deliberately not enforced.** It would reformat 28 of 36 files, collapsing the
+  manual alignment this codebase uses on purpose. Only `ruff check` gates CI.
+- The cross-platform matrix is the point, not ceremony: this is a filesystem watcher, and watchdog
+  behaviour, path handling and file locking genuinely differ per OS. The watcher tests already force
+  polling for determinism.
+- Test jobs set `git config --global user.name/user.email` because the git-mirror tests commit.
+- [release.yml](.github/workflows/release.yml) fires on a `v*` tag: it refuses to proceed unless the tag
+  equals `v<pyproject version>`, re-runs the suite on the tagged commit, publishes to PyPI via trusted
+  publishing (OIDC, no stored token, environment `pypi`), then cuts a GitHub release.
+
+## Tests
+
+[tests/conftest.py](tests/conftest.py) provides the fixture chain `cfg → db → ingestor`, plus `downloads`
+and a `make_zip(name, {member: content})` factory. `cfg` points the store at `tmp_path` and disables the
+git mirror and notifications for speed — [test_watcher.py](tests/test_watcher.py) re-enables git explicitly.
+Credential-shaped test fixtures are assembled at runtime by `conftest.fake_secret()` so real-looking tokens
+never appear as literals in the repo; keep new secret-scanner fixtures on that helper.

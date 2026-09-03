@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false     # never interrupt a publish midway
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  # The tag is the only thing asserting a version, and PyPI will not let you
+  # replace a file once uploaded — so disagreement with pyproject.toml has to
+  # stop the run before anything is built.
+  check-version:
+    name: tag matches pyproject version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          project="$(python -c '
+          import tomllib, pathlib
+          print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])
+          ')"
+          echo "tag=$tag  pyproject=$project"
+          if [ "$tag" != "v$project" ]; then
+            echo "::error::tag $tag does not match pyproject version $project (expected v$project)"
+            exit 1
+          fi
+          echo "version=$project" >> "$GITHUB_OUTPUT"
+
+  # A release must not be able to ship what CI would have rejected, so the
+  # whole suite runs again against the tagged commit.
+  test:
+    name: py${{ matrix.python }} / ${{ matrix.os }}
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - run: python -m pip install -e ".[dev]"
+
+      - name: Configure git for the mirror tests
+        run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+
+      - run: python -m pytest
+
+  build:
+    name: build distributions
+    needs: [check-version, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build twine
+          python -m build
+
+      - name: Check metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install --quiet dist/*.whl
+          cd /tmp
+          export LAMBDA_WATCHER_HOME=/tmp/smoke-home
+          test "$(/tmp/smoke/bin/lambda-watcher --version)" = "lambda-watcher ${{ needs.check-version.outputs.version }}"
+          /tmp/smoke/bin/lw doctor
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Trusted publishing: no API token is stored anywhere. Configure it once at
+  # https://pypi.org/manage/account/publishing/ for project `lambda-watcher`,
+  # workflow `release.yml`, environment `pypi`.
+  pypi:
+    name: publish to PyPI
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/lambda-watcher/${{ needs.check-version.outputs.version }}
+    permissions:
+      id-token: write          # mints the OIDC token PyPI verifies
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub release
+    needs: [check-version, build, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # creates the release and uploads assets
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0       # release notes are generated from history
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: lambda-watcher ${{ needs.check-version.outputs.version }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
