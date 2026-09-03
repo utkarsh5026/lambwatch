@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import zipfile
+from importlib import reload
 from pathlib import Path
 
 import pytest
@@ -157,3 +158,31 @@ def test_diff_against_the_oldest_version_explains_itself(home: Path, downloads: 
     result = runner.invoke(app, ["diff", "solo-fn"])
     assert result.exit_code == 1
     assert "oldest archived version" in result.output
+
+
+def test_generated_config_survives_a_windows_style_path(monkeypatch):
+    """`init` must write YAML it can read back, backslashes and all.
+
+    A Windows home reaches the template as ``C:\\Users\\you``, and inside a
+    double-quoted YAML scalar ``\\U`` starts an escape sequence — so an
+    unquoted interpolation made ``init`` emit a config that the very next
+    command could not parse. Patching config (not templates) is deliberate:
+    reloading templates re-runs its `from .config import ...`.
+    """
+    import yaml
+
+    from lambda_watcher import config, templates
+
+    home = r"C:\Users\runneradmin\.lambda-watcher"
+    downloads = r"C:\Users\runneradmin\Downloads"
+    monkeypatch.setattr(config, "DEFAULT_HOME", home)
+    monkeypatch.setattr(config, "default_download_dirs", lambda: [downloads])
+
+    try:
+        reload(templates)
+        parsed = yaml.safe_load(templates.DEFAULT_CONFIG_YAML)
+        assert parsed["store"]["root"] == home
+        assert parsed["watch"]["dirs"] == [downloads]
+    finally:
+        monkeypatch.undo()
+        reload(templates)

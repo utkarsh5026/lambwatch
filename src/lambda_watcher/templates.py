@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+import json
+
 from .config import DEFAULT_HOME, default_download_dirs
 
-_DIRS = "\n".join(f"    - {d}" for d in default_download_dirs())
+
+def _yaml_str(value: object) -> str:
+    """Quote a value as a YAML scalar.
+
+    Windows paths are the reason this exists: ``C:\\Users\\you`` inside a
+    double-quoted YAML scalar makes ``\\U`` an escape sequence, and the config
+    ``init`` had just written could not be read back. JSON string syntax is a
+    subset of YAML's double-quoted style, so ``json.dumps`` escapes the
+    backslashes correctly on every platform.
+    """
+    return json.dumps(str(value))
+
+
+_DIRS = "\n".join(f"    - {_yaml_str(d)}" for d in default_download_dirs())
 
 DEFAULT_CONFIG_YAML = f"""# lambda-watcher configuration
 # Every setting below is optional; the values shown are the defaults.
@@ -26,7 +41,7 @@ watch:
   scan_on_start_max_age_hours: 24
 
 store:
-  root: "{DEFAULT_HOME}"
+  root: {_yaml_str(DEFAULT_HOME)}
   # copy  = leave the download in place (default)
   # move  = take it out of Downloads once archived, keeping that folder clean
   # leave = archive only the extracted tree, never the .zip
