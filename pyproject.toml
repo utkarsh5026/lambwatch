@@ -45,6 +45,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# The suite shares fixtures through `from tests.conftest import ...`, which needs
+# the repository root importable. `python -m pytest` puts it on sys.path itself;
+# the `pytest` console script does not, and every test module that imports a
+# fixture failed to collect under it. Put it there for both.
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 110
