@@ -17,11 +17,13 @@ from lambda_watcher.diffing import icons
 from lambda_watcher.diffing.highlight import (
     FAMILY_BY_LANG,
     GRAMMARS,
+    MAX_FILE,
     MAX_LINE,
     highlight,
+    highlight_lines,
     language_of,
 )
-from lambda_watcher.diffing.render_html import CSS, render_html
+from lambda_watcher.diffing.render_html import CSS, _Row, _row_code, render_html
 from lambda_watcher.ingest import Ingestor
 from lambda_watcher.utils import LANG_BY_EXT
 
@@ -132,6 +134,86 @@ def test_a_dotfile_is_read_by_name_not_by_extension() -> None:
     assert language_of("config/.npmrc", "text") == "dotenv"
     assert language_of("handler.py", "python") == "python"
     assert language_of("notes.txt", "text") == "text"
+
+
+# ------------------------------------------------- the whole-file path
+# Files whose point is a construct that spans lines. The middle line is the one
+# a line-local lexer gets wrong, so that is the line each case checks.
+SPANNING = [
+    ("python", '"""Runtime configuration.\n\nTODO: move to Secrets Manager.\n"""\nimport os\n', 2, "s"),
+    ("javascript", "/**\n * @param {object} event\n */\nconst h = 1;\n", 1, "c"),
+    ("css", "/* theme\n   licence\n*/\n.card { color: red; }\n", 1, "c"),
+    ("html", "<!--\n  banner\n-->\n<div>x</div>\n", 1, "c"),
+    ("sql", "/* orders\n   report\n*/\nSELECT 1;\n", 1, "c"),
+    ("ruby", "=begin\nthe explanation\n=end\nputs 1\n", 1, "c"),
+]
+
+
+@pytest.mark.parametrize("lang,text,line,cls", SPANNING)
+def test_a_construct_that_spans_lines_is_coloured_on_every_line(lang, text, line, cls) -> None:
+    painted = highlight_lines(text, lang)
+    assert f'class="tk-{cls}"' in painted[line], painted[line]
+    # ...which is exactly what tokenising the line on its own cannot know: it
+    # either leaves the line bare or, worse, speckles the prose inside a comment
+    # block with keyword colours. Either way it never reaches the right class.
+    assert f'class="tk-{cls}"' not in highlight(text.split("\n")[line], lang)
+
+
+@pytest.mark.parametrize("lang,text", [(lang, text) for lang, text, _, _ in SPANNING])
+def test_whole_file_highlighting_returns_one_entry_per_line(lang: str, text: str) -> None:
+    # `_paint` zips these against the same split with strict=True: if this ever
+    # broke, every row below the break would borrow colour from its neighbour.
+    assert len(highlight_lines(text, lang)) == len(text.split("\n"))
+
+
+@pytest.mark.parametrize("lang,line", CORPUS)
+def test_whole_file_highlighting_escapes_everything_too(lang: str, line: str) -> None:
+    text = f"{line}\n{line}"
+    rendered = "\n".join(highlight_lines(text, lang))
+    assert _TAG.sub("", rendered) == html_lib.escape(text, quote=True)
+
+
+@pytest.mark.parametrize("text", HOSTILE)
+def test_whole_file_highlighting_cannot_be_escaped_either(text: str) -> None:
+    rendered = "\n".join(highlight_lines(text, "python"))
+    assert _TAG.sub("", rendered) == html_lib.escape(text, quote=True)
+    assert not re.search(r"<(?!/?span\b)", rendered)
+
+
+def test_a_file_too_big_or_too_wide_to_tokenise_is_left_plain() -> None:
+    wide = "var a=1;" * MAX_LINE  # one minified bundle line
+    assert highlight_lines(wide, "javascript") == [html_lib.escape(wide, quote=True)]
+    big = "x = 1\n" * (MAX_FILE // 4)
+    assert 'class="tk-' not in highlight_lines(big, "python")[0]
+    assert 'class="tk-' in highlight_lines("x = 1\n", "python")[0]
+
+
+def test_a_row_takes_its_colour_from_the_right_side_of_the_diff() -> None:
+    old = [("gone = 1", '<span class="tk-OLD">gone = 1</span>')]
+    new = [("kept = 2", '<span class="tk-NEW">kept = 2</span>')]
+    removed = _Row("del", "1", "", "gone = 1")
+    added = _Row("add", "", "1", "kept = 2")
+    assert _row_code(removed, "python", old, new) == old[0][1]
+    assert _row_code(added, "python", old, new) == new[0][1]
+
+
+def test_a_row_that_does_not_match_its_file_falls_back_instead_of_borrowing() -> None:
+    # The file moved on, or was rewritten between the diff and the render. The
+    # wrong colour on the right line is a bug; the right colour on the wrong
+    # line is a lie, so this must not reach for the painted line at all.
+    stale = [("something else entirely", '<span class="tk-s">something else entirely</span>')]
+    row = _Row("add", "", "1", "import os")
+    assert _row_code(row, "python", None, stale) == highlight("import os", "python")
+    # Out of range, and no file at all, take the same path.
+    assert _row_code(_Row("add", "", "99", "import os"), "python", None, stale) == \
+        highlight("import os", "python")
+    assert _row_code(_Row("add", "", "1", "import os"), "python", None, None) == \
+        highlight("import os", "python")
+
+
+def test_diff_metadata_is_never_highlighted_as_code() -> None:
+    row = _Row("meta", "", "", "\\ No newline at end of file")
+    assert _row_code(row, "python", None, None) == html_lib.escape(row.text, quote=True)
 
 
 # ------------------------------------------------------------------- icons

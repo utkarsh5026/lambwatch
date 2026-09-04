@@ -11,14 +11,19 @@ carry the token class, scanned left to right; whatever falls between two
 matches is plain text. The first letter of the group name *is* the class, which
 is what keeps the rule tables below readable.
 
-Two limits are deliberate:
+There are two ways in:
 
-* **Highlighting is line-local.** Diff hunks are discontinuous, so there is no
-  state worth carrying between the lines a report shows. A docstring or a
-  ``/* … */`` block that spans lines is coloured on the line it opens and then
-  stops — the honest answer for a view that only ever shows fragments.
-* **It is approximate and never authoritative.** Nothing downstream reads these
-  classes; getting a token wrong costs a colour, not a fact.
+* ``highlight_lines(text, lang)`` tokenises a **whole file** and hands back one
+  string per line. This is the one the report uses, because a docstring or a
+  licence header only comes out right when the lexer can see where the block
+  opened. Multi-line rules are written to span newlines, so the same grammar
+  serves both entry points.
+* ``highlight(text, lang)`` tokenises **one line** on its own. A diff row falls
+  back to this when its source file cannot be read or no longer matches, so a
+  report degrades to line-local colour rather than to none.
+
+It is approximate and never authoritative either way: nothing downstream reads
+these classes, and getting a token wrong costs a colour, not a fact.
 
 The one invariant that has to hold is the escaping one: every character of the
 input comes back HTML-escaped, whether it landed inside a span or not.
@@ -40,8 +45,11 @@ from pathlib import PurePosixPath
 #   y  key, tag or heading
 
 # A line long enough to be minified output is not worth tokenising: the regex
-# would do real work and the spans would outweigh the code they wrap.
+# would do real work and the spans would outweigh the code they wrap. The file
+# bound catches the same thing from the other side — a bundle that *is* one
+# enormous line, or a generated file where the win is not worth the scan.
 MAX_LINE = 4000
+MAX_FILE = 1 << 20
 
 
 def _grammar(*rules: tuple[str, str]) -> re.Pattern[str]:
@@ -56,7 +64,11 @@ def _grammar(*rules: tuple[str, str]) -> re.Pattern[str]:
     group with no class letter. The count check makes that a startup failure
     rather than a rendering one.
     """
-    pattern = re.compile("|".join(f"(?P<{cls}{i}>{rule})" for i, (cls, rule) in enumerate(rules)))
+    joined = "|".join(f"(?P<{cls}{i}>{rule})" for i, (cls, rule) in enumerate(rules))
+    # MULTILINE so that a rule anchored with ^ (a YAML key, a heading, an INI
+    # section) keeps meaning "start of line" when the grammar is handed a whole
+    # file. On a single line it changes nothing.
+    pattern = re.compile(joined, re.MULTILINE)
     if pattern.groups != len(rules):
         raise ValueError("a highlight rule opened a capturing group; use (?:…)")
     return pattern
@@ -70,17 +82,21 @@ def _words(cls: str, words: str) -> tuple[str, str]:
 # --------------------------------------------------------------- shared rules
 # Quoted strings accept an unterminated tail so that the opening line of a
 # multi-line string still reads as one, rather than dissolving into keywords.
+# Rules that must stay on one line say so with an explicit ``\n`` exclusion:
+# scanning a whole file, an unterminated quote would otherwise swallow the rest
+# of it. Rules that legitimately span lines end at ``\Z``, the end of the text —
+# not ``$``, which under re.MULTILINE would stop at the first newline.
 _HASH      = ("c", r"#[^\n]*")
 _SEMI      = ("c", r";[^\n]*")
 _SLASHES   = ("c", r"//[^\n]*")
-_BLOCK     = ("c", r"/\*.*?(?:\*/|$)")
+_BLOCK     = ("c", r"/\*[\s\S]*?(?:\*/|\Z)")
 _SQL_DASH  = ("c", r"--[^\n]*")
-_SGML      = ("c", r"<!--.*?(?:-->|$)")
-_DQUOTE    = ("s", r'"(?:\\.|[^"\\])*"?')
-_SQUOTE    = ("s", r"'(?:\\.|[^'\\])*'?")
+_SGML      = ("c", r"<!--[\s\S]*?(?:-->|\Z)")
+_DQUOTE    = ("s", r'"(?:\\.|[^"\\\n])*"?')
+_SQUOTE    = ("s", r"'(?:\\.|[^'\\\n])*'?")
 _BACKTICK  = ("s", r"`(?:\\.|[^`\\])*`?")
-_TRIPLE    = ("s", r'[rbfuRBFU]{0,2}(?:"""(?:.*?"""|.*)|\'\'\'(?:.*?\'\'\'|.*))')
-_PY_QUOTE  = ("s", r'[rbfuRBFU]{0,2}(?:"(?:\\.|[^"\\])*"?|\'(?:\\.|[^\'\\])*\'?)')
+_TRIPLE    = ("s", r'[rbfuRBFU]{0,2}(?:"""[\s\S]*?(?:"""|\Z)|\'\'\'[\s\S]*?(?:\'\'\'|\Z))')
+_PY_QUOTE  = ("s", r'[rbfuRBFU]{0,2}(?:"(?:\\.|[^"\\\n])*"?|\'(?:\\.|[^\'\\\n])*\'?)')
 _NUMBER    = ("n", r"\b(?:0[xXbBoO][0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?)\w*")
 _CALL      = ("f", r"[A-Za-z_]\w*(?=\s*\()")
 
@@ -140,6 +156,7 @@ GRAMMARS: dict[str, re.Pattern[str]] = {
         ("f", r"@[\w.]+"), _CALL,
     ),
     "ruby": _grammar(
+        ("c", r"^=begin[\s\S]*?(?:^=end[^\n]*|\Z)"),
         _HASH, _DQUOTE, _SQUOTE, _NUMBER,
         _words("k", _RB_KEYWORDS), _words("t", _RB_CONSTANTS),
         ("t", r":[A-Za-z_]\w*[?!]?"), ("f", r"[@$]{1,2}[A-Za-z_]\w*"), _CALL,
@@ -224,6 +241,50 @@ def language_of(path: str, lang: str) -> str:
         if name.startswith(prefix):
             return corrected
     return lang
+
+
+def highlight_lines(text: str, lang: str) -> list[str]:
+    """A whole file as escaped HTML, one entry per line.
+
+    This is where the cross-line constructs are won: the grammar sees the whole
+    text, so a docstring, a licence header or an HTML comment is one match no
+    matter how many lines it covers, and each line it crosses gets its own span.
+
+    The result always has exactly ``len(text.split("\n"))`` entries, so a caller
+    can index it by line number and check its own work against the same split.
+
+    The cost is scanning a whole file to colour the handful of lines a hunk
+    quotes from it — about 90ms for a 220 KB file, and `DiffConfig` already
+    refuses to diff anything past 512 KB. Skipping the scan for files with no
+    spanning construct in them would save that, at the price of a second path
+    through here that a later rule could silently fall out of sync with.
+    """
+    raw = text.split("\n")
+    grammar = GRAMMARS.get(FAMILY_BY_LANG.get(lang, ""))
+    if grammar is None or len(text) > MAX_FILE or any(len(line) > MAX_LINE for line in raw):
+        return [html.escape(line, quote=True) for line in raw]
+
+    lines: list[list[str]] = [[]]
+
+    def emit(chunk: str, cls: str) -> None:
+        for i, piece in enumerate(chunk.split("\n")):
+            if i:
+                lines.append([])
+            if piece:
+                escaped = html.escape(piece, quote=True)
+                lines[-1].append(f'<span class="tk-{cls}">{escaped}</span>' if cls else escaped)
+
+    pos = 0
+    for match in grammar.finditer(text):
+        start, end = match.span()
+        if start == end:
+            continue
+        if start > pos:
+            emit(text[pos:start], "")
+        emit(match.group(), match.lastgroup[0])
+        pos = end
+    emit(text[pos:], "")
+    return ["".join(parts) for parts in lines]
 
 
 def highlight(text: str, lang: str) -> str:

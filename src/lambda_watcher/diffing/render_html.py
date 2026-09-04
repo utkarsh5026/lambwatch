@@ -13,14 +13,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..utils import format_ts, human_size, signed
+from ..utils import format_ts, human_size, read_text, signed
 from . import icons
 from .compare import FileChange, VersionDiff
-from .highlight import highlight, language_of
+from .highlight import highlight, highlight_lines, language_of
 
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 ICON_CSS = icons.css()
+
+#: A file's lines as ``(source, highlighted)`` pairs — see `_paint`.
+_Painted = list[tuple[str, str]] | None
 
 CSS = """
 :root {
@@ -202,7 +205,44 @@ def _diff_rows(change: FileChange) -> list[_Row]:
     return rows
 
 
-def _render_file(change: FileChange) -> str:
+def _paint(root: Path | None, path: str | None, lang: str) -> list[tuple[str, str]] | None:
+    """One file as ``(source line, highlighted line)`` pairs, or None if unreadable.
+
+    The plain half is kept so the caller can prove a row and the line it is about
+    to borrow colour from are the same text.
+    """
+    if root is None or not path:
+        return None
+    text = read_text(root / path)
+    if text is None:
+        return None
+    # strict: `highlight_lines` promises one entry per line. If that ever broke,
+    # every row below would borrow colour from its neighbour — loud beats subtle.
+    return list(zip(text.split("\n"), highlight_lines(text, lang), strict=True))
+
+
+def _row_code(row: _Row, lang: str, old: _Painted, new: _Painted) -> str:
+    """The code cell for one diff row, coloured with the whole file in view.
+
+    A removed line belongs to the older version, an added or context line to the
+    newer one — which is why both sides are painted. Where the file cannot be
+    read, or the line the diff quoted is not the line sitting at that number any
+    more, this falls back to colouring the row on its own: worse colour on that
+    row, never colour borrowed from the wrong line.
+    """
+    if row.css == "meta":  # `\ No newline at end of file` is diff's note, not the file's
+        return _esc(row.text)
+    painted, number = (old, row.old_no) if row.css == "del" else (new, row.new_no)
+    if painted and number:
+        index = int(number) - 1
+        if 0 <= index < len(painted):
+            source, coloured = painted[index]
+            if source == row.text:
+                return coloured
+    return highlight(row.text, lang)
+
+
+def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | None = None) -> str:
     lang = language_of(change.path, change.lang)
     title = (
         f"{_esc(change.old_path)} → {_esc(change.path)}"
@@ -229,6 +269,8 @@ def _render_file(change: FileChange) -> str:
     ]
 
     if change.diff_lines:
+        old = _paint(a_root, change.old_path or change.path, lang) if change.old else None
+        new = _paint(b_root, change.path, lang) if change.new else None
         parts.append('<div class="diff"><table>')
         for row in _diff_rows(change):
             if row.css == "hunk":
@@ -238,8 +280,7 @@ def _render_file(change: FileChange) -> str:
             # The sign lives in its own unselectable cell so that copying a
             # block of the diff yields the code, not code with markers glued on.
             mark = {"add": "+", "del": "\u2212"}.get(row.css, "")
-            # `\ No newline at end of file` is diff's own note, not the file's.
-            code = _esc(row.text) if row.css == "meta" else highlight(row.text, lang)
+            code = _row_code(row, lang, old, new)
             parts.append(
                 f"<tr{css}>"
                 f'<td class="ln">{row.old_no}</td>'
@@ -401,7 +442,7 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
     a_when = format_ts(diff.a_meta.get("ingested_at"))
     b_when = format_ts(diff.b_meta.get("ingested_at"))
 
-    file_blocks = "\n".join(_render_file(c) for c in diff.files)
+    file_blocks = "\n".join(_render_file(c, diff.a_root, diff.b_root) for c in diff.files)
     if not diff.files:
         file_blocks = '<div class="empty">No file-level changes between these versions.</div>'
 
