@@ -322,6 +322,47 @@
   .tree b { color: var(--ink); font-weight: 600; }
   .tree i { color: var(--ink-faint); font-style: normal; }
 
+  /* ---------- report preview ---------- */
+  .shot {
+    display: block; margin: 0; border: 1px solid var(--rule);
+    border-radius: 8px; overflow: hidden; background: #fff;
+    box-shadow: var(--shadow);
+  }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot figcaption {
+    font-family: var(--f-mono); font-size: .72rem; letter-spacing: .06em;
+    color: var(--ink-faint); background: var(--surface);
+    padding: .55rem .8rem; border-top: 1px solid var(--rule);
+  }
+  .shot figcaption a { color: var(--accent); }
+
+  /* ---------- command reference ---------- */
+  .cmdlist { display: flex; flex-direction: column; border-top: 1px solid var(--rule); }
+  .cmd { border-bottom: 1px solid var(--rule-soft); }
+  .cmd > summary {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem 1.1rem;
+    padding: .72rem .2rem; cursor: pointer; list-style: none;
+  }
+  .cmd > summary::-webkit-details-marker { display: none; }
+  .cmd > summary::before {
+    content: "+"; font-family: var(--f-mono); color: var(--ink-faint);
+    width: 1rem; flex: none; font-size: .9rem;
+  }
+  .cmd[open] > summary::before { content: "−"; color: var(--brass); }
+  .cmd > summary:hover { color: var(--accent); }
+  .cmd__name {
+    font-family: var(--f-mono); font-size: .84rem; font-weight: 600;
+    color: var(--ink); flex: none; min-width: 13rem;
+  }
+  .cmd[open] .cmd__name { color: var(--brass); }
+  .cmd__what { font-size: .89rem; color: var(--ink-soft); flex: 1 1 18rem; }
+  .cmd__out { padding: .2rem 0 1.1rem 1rem; }
+  .cmd__out .slab { border-radius: 6px; }
+  @media (max-width: 620px) {
+    .cmd__name { min-width: 0; flex-basis: 100%; }
+    .cmd__out { padding-left: 0; }
+  }
+
   /* ---------- commands ---------- */
   .cmds { width: 100%; border-collapse: collapse; font-size: .89rem; }
   .cmds th {
@@ -395,10 +436,10 @@
     <div class="slab">
       <span class="slab-cap">a plain recursive diff between v1 and v2</span>
 <pre>$ diff -rq v0001/code v0002/code | wc -l
-<span class="c-white">190</span>
+<span class="c-white">61</span>
 
-<span class="c-dim">…of which 187 lines are site-packages/. The three changes that</span>
-<span class="c-dim">mattered are buried, and two of them are not file changes at all.</span></pre>
+<span class="c-dim">…of which 56 are site-packages/. The five that mattered are buried,</span>
+<span class="c-dim">and two of the real changes are not file changes at all.</span></pre>
     </div>
     <p>Worse, the two most dangerous changes in that deploy don’t show up in a file diff in any form: the code started reading a new environment variable, and started calling a new AWS service. Those are the ones that break a deploy at 2am.</p>
   </section>
@@ -467,7 +508,7 @@
         <div class="step__n">07</div>
         <div class="step__body">
           <div class="step__head"><h3>Promote it to version N</h3><span class="step__file">store.py</span></div>
-          <p class="step__what">The scratch directory is moved — not copied — into its permanent home, named for its sequence number and a short content hash: <code>0002-680b3da9</code>. A complete <code>manifest.json</code> is written beside it, and the original zip is kept as <code>package.zip</code>.</p>
+          <p class="step__what">The scratch directory is moved — not copied — into its permanent home, named for its sequence number and a short content hash: <code>0002-73d375ad</code>. A complete <code>manifest.json</code> is written beside it, and the original zip is kept as <code>package.zip</code>.</p>
           <p class="step__why">Staging lives on the same disk as the archive, so this is a rename rather than a second full copy of a large tree.</p>
         </div>
       </div>
@@ -521,11 +562,11 @@
     </div>
 
     <div class="slab">
-      <span class="slab-cap">four zips through the pipeline — the middle two are the same code</span>
-<pre><span class="c-add">new</span>                order-processor <span class="c-white">v0001</span>  (archived a new version)
-<span class="c-add">new</span>                order-processor <span class="c-white">v0002</span>  (archived a new version)
-<span class="c-key">unchanged</span>          order-processor <span class="c-white">v0002</span>  (identical to version 2)
-<span class="c-dim">duplicate-download</span> <span class="c-dim">?</span>                      (this exact file was already archived)</pre>
+      <span class="slab-cap">lambda-watcher ingest ~/Downloads/order-processor*.zip</span>
+<pre><span class="c-add">new</span> order-processor <span class="c-white">v0001</span> (archived a new version)
+<span class="c-add">new</span> order-processor <span class="c-white">v0002</span> (archived a new version)
+<span class="c-key">unchanged</span> order-processor <span class="c-white">v0002</span> (identical to version 2)
+<span class="c-dim">duplicate-download ? (this exact file was already archived)</span></pre>
     </div>
   </section>
 
@@ -535,16 +576,15 @@
     <div class="tree">~/.lambda-watcher/
 ├── <b>index.db</b>                        <i># rebuildable index — never the source of truth</i>
 ├── logs/watcher.log
-├── reports/                        <i># generated HTML</i>
-├── quarantine/                     <i># archives that failed, each with a reason file</i>
+├── reports/                        <i># generated HTML, once you ask for it</i>
 └── functions/
     └── <b>order-processor</b>/
         ├── versions/
-        │   ├── <b>0001-0bfa3022</b>/         <i># sequence number + content hash</i>
+        │   ├── <b>0001-bd9f77c8</b>/         <i># sequence number + content hash</i>
         │   │   ├── code/               <i># the unpacked tree</i>
         │   │   ├── manifest.json       <i># the complete analysis</i>
         │   │   └── package.zip         <i># the original download</i>
-        │   └── <b>0002-680b3da9</b>/
+        │   └── <b>0002-73d375ad</b>/
         └── git/                        <i># one commit per version, tagged v0001…</i></div>
     <div class="note">
       <p>Because every version directory carries a full <code>manifest.json</code>, the whole archive is portable and self-describing. Copy it to another machine, run <code>reindex</code>, and the database rebuilds itself from the manifests.</p>
@@ -553,61 +593,342 @@
 
   <section>
     <h2 id="payoff"><span class="h2-num">THE PAYOFF</span>The diff you actually wanted</h2>
-    <p class="lede">Same two versions the <code>diff -rq</code> at the top choked on. The 303 changed dependency files collapse into two lines, and the changes that never appear in a file diff get their own sections.</p>
+    <p class="lede">The same two versions the <code>diff -rq</code> at the top choked on. The 52 changed dependency files collapse into three version numbers, and the two changes that never appear in a file diff at all get sections of their own.</p>
     <div class="slab">
       <span class="slab-cap">lambda-watcher diff order-processor</span>
-<pre>╭───────────────────────────────────────────────────────────────────────╮
-│ <span class="c-white">order-processor   v0001 → v0002</span>                                       │
-│ <span class="c-add">2 added</span>  <span class="c-key">2 modified</span>  <span class="c-cyan">2 renamed</span>  <span class="c-dim">303 vendored (hidden)</span>  <span class="c-add">+16</span> / <span class="c-del">-7</span> lines │
-╰───────────────────────────────────────────────────────────────────────╯
-  size     7.1 KB → 11.0 KB (+3950 B)
+<pre>╭──────────────────────────────────────────────────────────────────────╮
+│ <span class="c-white">order-processor   v0001 → v0002</span>                                      │
+│ <span class="c-add">2 added</span>  <span class="c-key">2 modified</span>  <span class="c-cyan">3 renamed</span>  <span class="c-dim">52 vendored (hidden)</span>  <span class="c-add">+24</span> / <span class="c-del">-5</span> lines │
+╰──────────────────────────────────────────────────────────────────────╯
+  size     8.1 KB → 8.9 KB (+782 B)
 
 <span class="c-white">Dependencies</span>
    manager  package   from    to       origin
 <span class="c-add">+</span>  pip      pydantic  —       2.9.0    installed
 <span class="c-key">~</span>  pip      boto3     1.34.0  1.35.20  installed
+<span class="c-key">~</span>  pip      botocore  1.34.0  1.35.20  installed
 
   <span class="c-white">Env vars added:</span> <span class="c-add">QUEUE_URL</span>
   <span class="c-white">AWS services added:</span> <span class="c-add">sqs</span>
-  <span class="c-dim">↑ these need to exist in the function's environment configuration</span>
+  <span class="c-dim">↑ these need to exist in the function&#x27;s environment configuration</span>
 
 <span class="c-del">New findings</span>
-    <span class="c-del">high</span> aws-access-key-id  config.py:2  <span class="c-dim">AKIA…LE (20 chars)</span>
-    <span class="c-del">high</span> stripe-key         config.py:3  <span class="c-dim">sk_l…dc (32 chars)</span>
-     <span class="c-dim">low debug-flag        config.py:4  DEBUG = True</span>
+    <span class="c-del">high</span> aws-access-key-id  config.py:6  <span class="c-dim">AKIA…LE (20 chars)</span>
+    <span class="c-del">high</span> stripe-key  config.py:7  <span class="c-dim">sk_l…dc (32 chars)</span>
+     <span class="c-dim">low debug-flag  config.py:8  DEBUG = True</span>
 
 <span class="c-white">Files</span>
-   path                       +  −  size
-<span class="c-key">~</span>  lambda_function.py         <span class="c-add">8</span>  <span class="c-del">4</span>  +238
-<span class="c-key">~</span>  requirements.txt           <span class="c-add">2</span>  <span class="c-del">1</span>   +17
-<span class="c-add">+</span>  config.py                  <span class="c-add">4</span>     +166
-<span class="c-cyan">→</span>  db.py → helpers/db.py      <span class="c-add">1</span>  <span class="c-del">1</span>   +21</pre>
+   path                                                                 +  −  size
+<span class="c-key">~</span>  lambda_function.py                                                   9  2  +322
+<span class="c-key">~</span>  requirements.txt                                                     2  1   +17
+<span class="c-add">+</span>  config.py                                                           10     +235
+<span class="c-add">+</span>  helpers/__init__.py
+<span class="c-cyan">→</span>  db.py → helpers/db.py                                                1      +33
+<span class="c-cyan">→</span>  <span class="c-dim">site-packages/boto3-1.34.0.dist-info/METADATA →</span>                      1  1    +1
+   <span class="c-dim">site-packages/boto3-1.35.20.dist-info/METADATA</span>
+<span class="c-cyan">→</span>  <span class="c-dim">site-packages/botocore-1.34.0.dist-info/METADATA →</span>                   1  1    +1
+   <span class="c-dim">site-packages/botocore-1.35.20.dist-info/METADATA</span></pre>
     </div>
-    <p>Four things are happening there that a file diff can’t do. Vendored dependency churn is hidden and explained as version numbers instead. A file that moved <em>and</em> was edited is shown as one rename, not an unrelated add plus delete. A new environment variable and a new AWS service are called out as config you must apply before deploying. And a credential that appeared between the two versions gets its own section — stored redacted, so the secret never enters the index.</p>
+    <p>Four things are happening there that a file diff can’t do. The 52 vendored files are hidden and explained as three version numbers instead. A file that moved <em>and</em> was edited is reported as one rename, not an unrelated delete plus add. A new environment variable and a new AWS service are called out as configuration you have to apply before this deploys cleanly. And the credentials that appeared between the two versions get their own section — recorded redacted, so the secret itself never enters the index.</p>
+
+    <p>The rename is the one worth looking at closely. <code>db.py</code> moved into a package <em>and</em> gained a line in the same deploy — the case a plain diff can only describe as an unrelated delete plus add:</p>
+    <div class="slab">
+      <span class="slab-cap">one hunk of the same diff</span>
+<pre><span class="c-dim">──────────────────────────────</span> <span class="c-cyan">db.py → helpers/db.py</span> <span class="c-dim">───────────────────────────────</span>
+<span class="c-del">--- a/db.py</span>
+<span class="c-add">+++ b/helpers/db.py</span>
+<span class="c-key">@@ -9,5 +9,6 @@</span>
+             "id": order["id"],
+             "items": order["items"],
+             "total": Decimal(str(order["total"])),
+<span class="c-add">+            "status": "PENDING",</span>
+         }
+     )</pre>
+    </div>
+
+    <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step. It is one file with the stylesheet inlined, so it survives being emailed or dropped in a bucket:</p>
+    <figure class="shot">
+      <img src="examples/report-preview.png" width="2320" height="1520" loading="lazy"
+           alt="The HTML diff report for order-processor v0001 to v0002: summary tiles for files changed, lines, dependencies, package size, new findings and vendored files; then tables for dependencies, configuration impact and new findings.">
+      <figcaption>lambda-watcher diff order-processor --html · <a href="examples/report/v0001-v0002.html">open the real one</a> · <a href="examples/report/">or its index</a><br>the published copy masks the demo's two fake credentials in the file diff — nothing else is altered</figcaption>
+    </figure>
   </section>
 
   <section>
     <h2 id="commands"><span class="h2-num">IN PRACTICE</span>The commands you’d actually use</h2>
-    <p class="lede">Start the watcher once and leave it. Everything else is reading what it archived.</p>
-    <div class="table-wrap">
-      <table class="cmds">
-        <thead>
-          <tr><th>Command</th><th>What it does</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>lw watch</td><td>Watch the download folders and archive everything that lands. Leave it running.</td></tr>
-          <tr><td>lw ls</td><td>Every function archived so far.</td></tr>
-          <tr><td>lw versions FN</td><td>Every archived version of one function.</td></tr>
-          <tr><td>lw show FN [V]</td><td>Runtime, handler, dependencies, env vars, services and findings for one version.</td></tr>
-          <tr><td>lw diff FN</td><td>Compare two versions. Defaults to the last two. Add <code>--html --open</code> for a shareable report.</td></tr>
-          <tr><td>lw report FN</td><td>A browsable HTML history — an index plus a diff for every step.</td></tr>
-          <tr><td>lw export FN V</td><td>Get a version back out as a deployable zip. This is your rollback.</td></tr>
-          <tr><td>lw git FN log -p</td><td>Run git inside that function’s mirror, where <code>git diff v0002 v0010</code> just works.</td></tr>
-          <tr><td>lw rename A B</td><td>Fix a misidentified name. <code>--alias</code> makes the fix stick for future downloads.</td></tr>
-          <tr><td>lw backfill DIR</td><td>Import a folder of old downloads, oldest first, so version numbers match real history.</td></tr>
-          <tr><td>lw log</td><td>Recent activity — including the downloads that were skipped, and why.</td></tr>
-        </tbody>
-      </table>
+    <p class="lede">Start the watcher once and leave it; everything else is reading what it archived. Every command below is expanded with the output it actually prints — these are captures, not sketches.</p>
+
+    <p><code>show</code> is the one to reach for first, and the line worth noticing in it is <code>2 declared, 3 installed</code>: <code>requirements.txt</code> names two packages and three arrived in the zip. The third came along as a transitive dependency, and it is the installed list — not the declared one — that describes what actually ran.</p>
+
+    <div class="cmdlist">
+      <details class="cmd" open>
+        <summary><span class="cmd__name">lw watch</span><span class="cmd__what">Watch the download folders and archive everything that lands. Leave it running.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher watch</span>
+<pre>lambda-watcher 0.1.0 — archiving into ~/.lambda-watcher
+watching ~/Downloads. Press Ctrl-C to stop.
+               new  order-processor v0001  order-processor.zip — archived a new version
+               new  order-processor v0002  order-processor (1).zip — archived a new version
+                    review: lambda-watcher diff &quot;order-processor&quot; --html --open
+         unchanged  order-processor v0002  order-processor (2).zip — identical to version 2
+done</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw init</span><span class="cmd__what">Write a commented config file you can edit. Optional — the defaults work.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher init</span>
+<pre>wrote ~/.lambda-watcher/config.yaml
+archive root: ~/.lambda-watcher
+watching:     ~/Downloads
+
+Next: lambda-watcher watch</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw doctor</span><span class="cmd__what">Check the config, watch folders, store, git and disk space before you rely on it.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher doctor</span>
+<pre>check         status  detail                                                  
+config file   ok      ~/.lambda-watcher/config.yaml  
+archive root  ok      ~/.lambda-watcher              
+watch dir     ok      ~/Downloads                    
+git mirror    ok      enabled                                                 
+index         ok      0 function(s), 0 version(s)                             
+disk free     ok      29.6 GB                                                 </pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw ingest FILE...</span><span class="cmd__what">Archive zips by hand, in the order you pass them.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher ingest ~/Downloads/order-processor*.zip</span>
+<pre>new order-processor v0001 (archived a new version)
+new order-processor v0002 (archived a new version)
+unchanged order-processor v0002 (identical to version 2)
+duplicate-download ? (this exact file was already archived)</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw backfill DIR</span><span class="cmd__what">Import a folder of old backups, oldest first, so version numbers match history. <code>--dry-run</code> shows the names it would assign.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher backfill ~/Downloads --dry-run</span>
+<pre>file                     modified          would become     via              
+order-processor.zip      2026-09-04 05:52  order-processor  filename/medium  
+order-processor (1).zip  2026-09-04 05:52  order-processor  filename/medium  
+order-processor (2).zip  2026-09-04 05:52  order-processor  filename/medium  
+3 file(s). Re-run without --dry-run to import.</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw ls</span><span class="cmd__what">Every function archived so far.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher ls</span>
+<pre>function         versions  latest  last seen         runtime  
+order-processor         2   v0002  2026-09-04 05:53  python   </pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw versions FN</span><span class="cmd__what">Every archived version of one function, newest first.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher versions order-processor</span>
+<pre>order-processor                                                                     
+version  archived          files    size  handler           downloaded as    label  
+v0002    2026-09-04 05:53     59  8.9 KB  lambda_function…  order-processor         
+                                                            (1).zip                 
+v0001    2026-09-04 05:53     55  8.1 KB  lambda_function…  order-processo…         
+
+Compare the last two: lambda-watcher diff &quot;order-processor&quot;</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd" open>
+        <summary><span class="cmd__name">lw show FN [V]</span><span class="cmd__what">Everything one version contains: runtime, handler, dependencies, env vars, services and findings.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher show order-processor latest</span>
+<pre>order-processor v0002
+  archived   2026-09-04 05:53
+  source     order-processor (1).zip
+  runtime    python (high confidence)
+  handler    lambda_function.lambda_handler
+  contents   59 files, 8.9 KB (5 first-party, 57 lines)
+  tree hash  73d375ad10b94e96
+  location   ~/.lambda-watcher/functions/order-processor/versions/0002-73d375ad
+
+Dependencies  2 declared, 3 installed
+  boto3 1.35.20
+  botocore 1.35.20
+  pydantic 2.9.0
+
+Environment variables read
+  QUEUE_URL, TABLE_NAME
+
+AWS services used
+  dynamodb, sqs
+
+Findings
+    high aws-access-key-id config.py:6 AKIA…LE (20 chars)
+    high stripe-key config.py:7 sk_l…dc (32 chars)
+     low debug-flag config.py:8 DEBUG = True</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw diff FN</span><span class="cmd__what">Compare two versions — the last two unless you say otherwise. Add <code>--html --open</code> for the report below.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher diff order-processor</span>
+<pre>╭──────────────────────────────────────────────────────────────────────╮
+│ order-processor   v0001 → v0002                                      │
+│ 2 added  2 modified  3 renamed  52 vendored (hidden)  +24 / -5 lines │
+╰──────────────────────────────────────────────────────────────────────╯
+  size     8.1 KB → 8.9 KB (+782 B)
+
+Dependencies                                      
+   manager  package   from    to       origin     
++  pip      pydantic  —       2.9.0    installed  
+~  pip      boto3     1.34.0  1.35.20  installed  
+~  pip      botocore  1.34.0  1.35.20  installed  
+
+  Env vars added: QUEUE_URL
+  AWS services added: sqs
+  ↑ these need to exist in the function&#x27;s environment configuration
+
+New findings
+    high aws-access-key-id  config.py:6  AKIA…LE (20 chars)
+    high stripe-key  config.py:7  sk_l…dc (32 chars)
+     low debug-flag  config.py:8  DEBUG = True
+
+Files                                                                               
+   path                                                                 +  −  size  
+~  lambda_function.py                                                   9  2  +322  
+~  requirements.txt                                                     2  1   +17  
++  config.py                                                           10     +235  
++  helpers/__init__.py                                                              
+→  db.py → helpers/db.py                                                1      +33  
+→  site-packages/boto3-1.34.0.dist-info/METADATA →                      1  1    +1  
+   site-packages/boto3-1.35.20.dist-info/METADATA                                   
+→  site-packages/botocore-1.34.0.dist-info/METADATA →                   1  1    +1  
+   site-packages/botocore-1.35.20.dist-info/METADATA</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw report FN</span><span class="cmd__what">Build a browsable HTML history: an index plus a diff for every step.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher report order-processor</span>
+<pre>wrote ~/.lambda-watcher/reports/order-processor/index.html (2 versions)</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw export FN V</span><span class="cmd__what">Get a version back out as a deployable zip. This is your rollback.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher export order-processor 1 -o rollback.zip</span>
+<pre>wrote ~/rollback.zip (16.2 KB)</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw git FN ...</span><span class="cmd__what">Run git inside that function's mirror, where <code>git diff v0002 v0010</code> just works.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher git order-processor log --oneline</span>
+<pre>7bdc51c order-processor v0002
+12f17f7 order-processor v0001</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw path FN [V]</span><span class="cmd__what">Print where something lives, for <code>cd "$(lw path order-processor)"</code>.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher path order-processor --git</span>
+<pre>~/.lambda-watcher/functions/order-processor/git</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw search TERM</span><span class="cmd__what">Find a filename or package across every function and version at once.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher search boto3</span>
+<pre>Files                                                                           
+function         version  path                                            size  
+order-processor  v0002    site-packages/boto3/__init__.py                 24 B  
+order-processor  v0002    site-packages/boto3-1.35.20.dist-info/METADATA  83 B  
+order-processor  v0001    site-packages/boto3/__init__.py                 23 B  
+order-processor  v0001    site-packages/boto3-1.34.0.dist-info/METADATA   82 B  
+Dependencies                                
+function         version  package  version  
+order-processor  v0002    boto3    1.35.20  
+order-processor  v0001    boto3    1.34.0   </pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw log</span><span class="cmd__what">Recent activity — including the downloads that were skipped, and why.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher log</span>
+<pre>when              event               function         detail                       
+2026-09-04 05:53  duplicate-download  -                order-processor (2).zip      
+                                                       {&quot;zip_sha256&quot;:               
+                                                       &quot;1be974e62ccd675a47aa9bc72…  
+2026-09-04 05:53  unchanged           order-processor  order-processor (2).zip      
+                                                       {&quot;seq&quot;: 2}                   
+2026-09-04 05:53  new-version         order-processor  order-processor (1).zip      
+                                                       {&quot;seq&quot;: 2, &quot;tree_hash&quot;:      
+                                                       &quot;73d375ad10b94e967da67f8be…  
+2026-09-04 05:53  new-version         order-processor  order-processor.zip          
+                                                       {&quot;seq&quot;: 1, &quot;tree_hash&quot;:      
+                                                       &quot;bd9f77c8626b7f3c57ea04987…  </pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw label FN V TEXT</span><span class="cmd__what">Annotate a version so you can recognise it later.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher label order-processor 2 &quot;prod deploy 2026-03-01&quot;</span>
+<pre>labelled order-processor v0002: prod deploy 2026-03-01</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw rename OLD NEW</span><span class="cmd__what">Fix a misidentified name. <code>--alias</code> makes the fix stick for future downloads.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher rename order-processor orders-api --alias order-proc</span>
+<pre>renamed order-processor → orders-api
+future downloads containing &#x27;order-proc&#x27; will map here automatically</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw reindex</span><span class="cmd__what">Rebuild <code>index.db</code> from the manifests on disk. The archive is the source of truth.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher reindex --yes</span>
+<pre>reindexed 1 function(s), 2 version(s)</pre>
+          </div>
+        </div>
+      </details>
     </div>
   </section>
 
@@ -622,12 +943,18 @@
     <div class="note">
       <p><strong>No AWS API calls, ever.</strong> The tool only reads files already sitting on your disk. It needs no credentials and works offline. That’s a deliberate boundary, not a missing feature.</p>
     </div>
-    <p class="lede">Deeper reading: <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/design.md">design notes</a> on why the analysis and diff layers work the way they do, and <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/autostart.md">autostart recipes</a> for launchd, systemd and Task Scheduler.</p>
+    <div class="note">
+      <p><strong>Run the examples yourself.</strong> Every capture on this page comes out of one script, against the real pipeline — no AWS account, no network. It builds the <code>order-processor</code> zips, ingests them, and prints each block in the order you just read them:</p>
+      <div class="install"><b>python3 -m venv .venv &amp;&amp; .venv/bin/pip install -e ".[dev]"</b>
+<b>.venv/bin/python docs/examples/build_demo.py</b></div>
+      <p>The zips are stamped with a pinned build time, so the version directories come out as <code>0001-bd9f77c8</code> and <code>0002-73d375ad</code> on your machine too — the same ones quoted above.</p>
+    </div>
+    <p class="lede">Deeper reading: <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/examples/README.md">how the examples are built</a>, <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/design.md">design notes</a> on why the analysis and diff layers work the way they do, and <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/autostart.md">autostart recipes</a> for launchd, systemd and Task Scheduler.</p>
   </section>
 
   <footer>
     <span><a href="https://github.com/utkarsh5026/lambwatch">github.com/utkarsh5026/lambwatch</a></span>
-    <span>every terminal capture on this page is real output</span>
+    <span>every terminal capture here is real output of <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/examples/build_demo.py">build_demo.py</a></span>
     <span>Apache-2.0</span>
   </footer>
 

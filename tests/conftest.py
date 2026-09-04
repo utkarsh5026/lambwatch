@@ -82,12 +82,28 @@ def downloads(cfg: Config) -> Path:
 
 @pytest.fixture
 def make_zip(downloads: Path):
-    def _make(name: str, files: dict[str, str | bytes]) -> Path:
+    """Build a deployment zip, stamped with a fixed build time.
+
+    ``writestr`` would otherwise stamp each member with the current clock, and
+    DOS timestamps have two-second granularity — so two zips of identical
+    content came out byte-identical most of the time and differed whenever the
+    calls straddled an even second. That made
+    ``test_identical_file_is_recognised_as_a_duplicate_download`` flaky: the
+    second zip is only a `duplicate-download` if its bytes really are the same.
+    Tests that need the bytes to differ pass an explicit ``built``.
+    """
+    def _make(
+        name: str,
+        files: dict[str, str | bytes],
+        built: tuple[int, int, int, int, int, int] = (2026, 1, 1, 0, 0, 0),
+    ) -> Path:
         path = downloads / name
         path.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
             for member, content in files.items():
-                zf.writestr(member, content)
+                info = zipfile.ZipInfo(member, date_time=built)
+                info.external_attr = 0o644 << 16
+                zf.writestr(info, content)
         return path
 
     return _make
