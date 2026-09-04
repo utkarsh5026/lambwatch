@@ -13,6 +13,10 @@
   --del-bg: #fdeaec; --del-fg: #7d1220; --del-gutter: #f7ced4;
   --meta-bg: #eef2f7; --chip: #e8ebef;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Syntax tokens, One Light. Numbers and constants share a colour on purpose:
+     both are literal values, and the eye reads them as the same thing. */
+  --tk-c: #8b8f97; --tk-k: #a626a4; --tk-s: #50a14f; --tk-n: #986801;
+  --tk-t: #986801; --tk-f: #4078f2; --tk-y: #0184bc;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -21,6 +25,8 @@
     --add-bg: #10261a; --add-fg: #6fd08c; --add-gutter: #17351f;
     --del-bg: #2a1418; --del-fg: #ff8b95; --del-gutter: #3d1a20;
     --meta-bg: #1b2129; --chip: #232a33;
+    --tk-c: #7f848e; --tk-k: #c678dd; --tk-s: #98c379; --tk-n: #d19a66;
+    --tk-t: #d19a66; --tk-f: #61afef; --tk-y: #56b6c2;
   }
 }
 * { box-sizing: border-box; }
@@ -70,31 +76,80 @@ details.file > summary { cursor: pointer; padding: 9px 12px; display: flex; gap:
   list-style: none; font-size: 13px; }
 details.file > summary::-webkit-details-marker { display: none; }
 details.file > summary:hover { background: var(--meta-bg); }
-summary .path { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; flex: 1; }
+summary .path { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
+summary .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 summary .stat { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
 .diff { background: var(--bg); border-top: 1px solid var(--border); overflow-x: auto; }
 .diff table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; }
 .diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
 .diff td.ln { width: 1%; min-width: 46px; text-align: right; color: var(--muted); user-select: none;
   background: var(--panel); border-right: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-.diff tr.add td.code { background: var(--add-bg); color: var(--add-fg); }
+.diff td.mark { width: 1%; padding: 0 2px 0 8px; text-align: center; color: var(--muted); user-select: none; }
+.diff td.code { padding-left: 6px; }
+.diff tr.add td.code, .diff tr.add td.mark { background: var(--add-bg); }
+.diff tr.add td.mark { color: var(--add-fg); }
 .diff tr.add td.ln { background: var(--add-gutter); }
-.diff tr.del td.code { background: var(--del-bg); color: var(--del-fg); }
+.diff tr.del td.code, .diff tr.del td.mark { background: var(--del-bg); }
+.diff tr.del td.mark { color: var(--del-fg); }
 .diff tr.del td.ln { background: var(--del-gutter); }
 .diff tr.hunk td { background: var(--meta-bg); color: var(--muted); font-size: 11.5px; padding: 3px 8px; }
+.tk-c { color: var(--tk-c); font-style: italic; }
+.tk-k { color: var(--tk-k); }
+.tk-s { color: var(--tk-s); }
+.tk-n { color: var(--tk-n); }
+.tk-t { color: var(--tk-t); }
+.tk-f { color: var(--tk-f); }
+.tk-y { color: var(--tk-y); }
 .note { color: var(--muted); font-size: 12.5px; padding: 8px 12px; }
 .empty { color: var(--muted); padding: 12px 0; }
 footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border);
   color: var(--muted); font-size: 12px; }
 .hidden { display: none !important; }
+svg.sprite { display: none; }
+.fic { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.fic-python { color: #4b8bbe; }
+.fic-javascript { color: #c9a227; }
+.fic-typescript { color: #3178c6; }
+.fic-java { color: #c26a4a; }
+.fic-kotlin { color: #9a6ef0; }
+.fic-go { color: #23a3c4; }
+.fic-ruby { color: #cc4b4b; }
+.fic-rust { color: #c8763c; }
+.fic-csharp { color: #8a63c4; }
+.fic-php { color: #6e7fbc; }
+.fic-scala { color: #c4574a; }
+.fic-swift { color: #e0713d; }
+.fic-c { color: #6d8bbd; }
+.fic-cpp { color: #8a7fc4; }
+.fic-sql { color: #4a9aa8; }
+.fic-shell { color: #6ea84f; }
+.fic-powershell { color: #3f7fd0; }
+.fic-dockerfile { color: #2f8fd0; }
+.fic-makefile { color: #8a8f98; }
+.fic-json { color: #b58900; }
+.fic-yaml { color: #9068c0; }
+.fic-toml { color: #a5713d; }
+.fic-ini { color: #8a8f98; }
+.fic-html { color: #e06c50; }
+.fic-xml { color: #d4713f; }
+.fic-css { color: #3c9ad9; }
+.fic-markdown { color: #7a8290; }
+.fic-csv { color: #5f9e6e; }
+.fic-text { color: #8b8f97; }
+.fic-dotenv { color: #b58900; }
+.fic-binary { color: #8b8f97; }
+.fic-image { color: #a06fc0; }
+.fic-_other { color: #8b8f97; }
 </style>
 </head>
 <body>
+<svg class="sprite" aria-hidden="true"><symbol id="g-code" viewBox="0 0 16 16"><path d="M6.2 4.4 2.6 8l3.6 3.6"/><path d="M9.8 4.4 13.4 8l-3.6 3.6"/></symbol><symbol id="g-markup" viewBox="0 0 16 16"><path d="M5.4 3.6 2 8l3.4 4.4"/><path d="M10.6 3.6 14 8l-3.4 4.4"/><path d="M9.4 2.6 6.6 13.4"/></symbol><symbol id="g-data" viewBox="0 0 16 16"><path d="M6.6 2.8c-1.4 0-2 .7-2 1.9v1.4c0 1-.6 1.6-1.6 1.9 1 .3 1.6.9 1.6 1.9v1.4c0 1.2.6 1.9 2 1.9"/><path d="M9.4 2.8c1.4 0 2 .7 2 1.9v1.4c0 1 .6 1.6 1.6 1.9-1 .3-1.6.9-1.6 1.9v1.4c0 1.2-.6 1.9-2 1.9"/></symbol><symbol id="g-doc" viewBox="0 0 16 16"><path d="M3.2 4.2h9.6"/><path d="M3.2 8h9.6"/><path d="M3.2 11.8h5.8"/></symbol><symbol id="g-terminal" viewBox="0 0 16 16"><rect x="2.2" y="3.2" width="11.6" height="9.6" rx="2"/><path d="M4.9 6.9 7 9l-2.1 2.1"/><path d="M8.7 11.1h2.8"/></symbol><symbol id="g-style" viewBox="0 0 16 16"><path d="M8 2.4c2.6 2.7 4 4.7 4 6.3a4 4 0 0 1-8 0c0-1.6 1.4-3.6 4-6.3z"/></symbol><symbol id="g-lock" viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.2" rx="1.6"/><path d="M5.6 7V5.4a2.4 2.4 0 0 1 4.8 0V7"/></symbol><symbol id="g-image" viewBox="0 0 16 16"><rect x="2.4" y="3.4" width="11.2" height="9.2" rx="1.8"/><circle cx="6" cy="6.9" r="1.1"/><path d="m3 11.8 3.2-3 2.4 2.3 2.2-1.8 2.8 2.5"/></symbol><symbol id="g-binary" viewBox="0 0 16 16"><path d="M8 2.4 13.6 5.4v5.2L8 13.6 2.4 10.6V5.4z"/><path d="M2.4 5.4 8 8.4l5.6-3"/><path d="M8 8.4v5.2"/></symbol></svg>
 <div class="wrap">
   <header class="top">
     <h1>order-processor <span class="ver">v0001 → v0002</span></h1>
     <div class="sub">
-      v0001 archived 2026-09-04 05:59 · v0002 archived 2026-09-04 05:59
+      v0001 archived 2026-09-04 09:01 · v0002 archived 2026-09-04 09:01
       · 2 added, 2 modified, 3 renamed, 52 vendored
     </div>
   </header>
@@ -122,82 +177,82 @@ footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border
   <details class="file" data-path="lambda_function.py " data-vendor="0">
 <summary>
 <span class="chip modified">modified</span>
-<span class="path">lambda_function.py</span>
+<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">lambda_function.py</span></span>
 <span class="stat"><span class="add">+9</span> <span class="del">−2</span> <span style="color:var(--muted)">+322 B</span></span>
 </summary>
 <div class="diff"><table>
-<tr class="hunk"><td colspan="3">@@ -1,16 +1,19 @@</td></tr>
-<tr class="del"><td class="ln">1</td><td class="ln"></td><td class="code">&quot;&quot;&quot;Validate an incoming order and record it.&quot;&quot;&quot;</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="code">&quot;&quot;&quot;Validate an incoming order, record it, and queue it for fulfilment.&quot;&quot;&quot;</td></tr>
-<tr><td class="ln">2</td><td class="ln">2</td><td class="code"></td></tr>
-<tr><td class="ln">3</td><td class="ln">3</td><td class="code">import json</td></tr>
-<tr><td class="ln">4</td><td class="ln">4</td><td class="code">import os</td></tr>
-<tr><td class="ln">5</td><td class="ln">5</td><td class="code"></td></tr>
-<tr><td class="ln">6</td><td class="ln">6</td><td class="code">import boto3</td></tr>
-<tr><td class="ln">7</td><td class="ln">7</td><td class="code"></td></tr>
-<tr class="del"><td class="ln">8</td><td class="ln"></td><td class="code">from db import put_order</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">8</td><td class="code">from config import MAX_ITEMS</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">9</td><td class="code">from helpers.db import put_order</td></tr>
-<tr><td class="ln">9</td><td class="ln">10</td><td class="code"></td></tr>
-<tr><td class="ln">10</td><td class="ln">11</td><td class="code">TABLE_NAME = os.environ[&quot;TABLE_NAME&quot;]</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">12</td><td class="code">QUEUE_URL = os.environ[&quot;QUEUE_URL&quot;]</td></tr>
-<tr><td class="ln">11</td><td class="ln">13</td><td class="code"></td></tr>
-<tr><td class="ln">12</td><td class="ln">14</td><td class="code">dynamodb = boto3.resource(&quot;dynamodb&quot;)</td></tr>
-<tr><td class="ln">13</td><td class="ln">15</td><td class="code">table = dynamodb.Table(TABLE_NAME)</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">16</td><td class="code">sqs = boto3.client(&quot;sqs&quot;)</td></tr>
-<tr><td class="ln">14</td><td class="ln">17</td><td class="code"></td></tr>
-<tr><td class="ln">15</td><td class="ln">18</td><td class="code"></td></tr>
-<tr><td class="ln">16</td><td class="ln">19</td><td class="code">def lambda_handler(event, context):</td></tr>
-<tr class="hunk"><td colspan="3">@@ -19,6 +22,10 @@</td></tr>
-<tr><td class="ln">19</td><td class="ln">22</td><td class="code">    if not order.get(&quot;items&quot;):</td></tr>
-<tr><td class="ln">20</td><td class="ln">23</td><td class="code">        return {&quot;statusCode&quot;: 400, &quot;body&quot;: json.dumps({&quot;error&quot;: &quot;order has no items&quot;})}</td></tr>
-<tr><td class="ln">21</td><td class="ln">24</td><td class="code"></td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">25</td><td class="code">    if len(order[&quot;items&quot;]) &gt; MAX_ITEMS:</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">26</td><td class="code">        return {&quot;statusCode&quot;: 422, &quot;body&quot;: json.dumps({&quot;error&quot;: &quot;too many items&quot;})}</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">27</td><td class="code"></td></tr>
-<tr><td class="ln">22</td><td class="ln">28</td><td class="code">    put_order(table, order)</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">29</td><td class="code">    sqs.send_message(QueueUrl=QUEUE_URL, MessageBody=json.dumps(order))</td></tr>
-<tr><td class="ln">23</td><td class="ln">30</td><td class="code"></td></tr>
-<tr><td class="ln">24</td><td class="ln">31</td><td class="code">    return {&quot;statusCode&quot;: 201, &quot;body&quot;: json.dumps({&quot;id&quot;: order[&quot;id&quot;]})}</td></tr>
+<tr class="hunk"><td colspan="4">@@ -1,16 +1,19 @@</td></tr>
+<tr class="del"><td class="ln">1</td><td class="ln"></td><td class="mark">−</td><td class="code"><span class="tk-s">&quot;&quot;&quot;Validate an incoming order and record it.&quot;&quot;&quot;</span></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="mark">+</td><td class="code"><span class="tk-s">&quot;&quot;&quot;Validate an incoming order, record it, and queue it for fulfilment.&quot;&quot;&quot;</span></td></tr>
+<tr><td class="ln">2</td><td class="ln">2</td><td class="mark"></td><td class="code"></td></tr>
+<tr><td class="ln">3</td><td class="ln">3</td><td class="mark"></td><td class="code"><span class="tk-k">import</span> json</td></tr>
+<tr><td class="ln">4</td><td class="ln">4</td><td class="mark"></td><td class="code"><span class="tk-k">import</span> os</td></tr>
+<tr><td class="ln">5</td><td class="ln">5</td><td class="mark"></td><td class="code"></td></tr>
+<tr><td class="ln">6</td><td class="ln">6</td><td class="mark"></td><td class="code"><span class="tk-k">import</span> boto3</td></tr>
+<tr><td class="ln">7</td><td class="ln">7</td><td class="mark"></td><td class="code"></td></tr>
+<tr class="del"><td class="ln">8</td><td class="ln"></td><td class="mark">−</td><td class="code"><span class="tk-k">from</span> db <span class="tk-k">import</span> put_order</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">8</td><td class="mark">+</td><td class="code"><span class="tk-k">from</span> config <span class="tk-k">import</span> MAX_ITEMS</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">9</td><td class="mark">+</td><td class="code"><span class="tk-k">from</span> helpers.db <span class="tk-k">import</span> put_order</td></tr>
+<tr><td class="ln">9</td><td class="ln">10</td><td class="mark"></td><td class="code"></td></tr>
+<tr><td class="ln">10</td><td class="ln">11</td><td class="mark"></td><td class="code">TABLE_NAME = os.environ[<span class="tk-s">&quot;TABLE_NAME&quot;</span>]</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">12</td><td class="mark">+</td><td class="code">QUEUE_URL = os.environ[<span class="tk-s">&quot;QUEUE_URL&quot;</span>]</td></tr>
+<tr><td class="ln">11</td><td class="ln">13</td><td class="mark"></td><td class="code"></td></tr>
+<tr><td class="ln">12</td><td class="ln">14</td><td class="mark"></td><td class="code">dynamodb = boto3.<span class="tk-f">resource</span>(<span class="tk-s">&quot;dynamodb&quot;</span>)</td></tr>
+<tr><td class="ln">13</td><td class="ln">15</td><td class="mark"></td><td class="code">table = dynamodb.<span class="tk-f">Table</span>(TABLE_NAME)</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">16</td><td class="mark">+</td><td class="code">sqs = boto3.<span class="tk-f">client</span>(<span class="tk-s">&quot;sqs&quot;</span>)</td></tr>
+<tr><td class="ln">14</td><td class="ln">17</td><td class="mark"></td><td class="code"></td></tr>
+<tr><td class="ln">15</td><td class="ln">18</td><td class="mark"></td><td class="code"></td></tr>
+<tr><td class="ln">16</td><td class="ln">19</td><td class="mark"></td><td class="code"><span class="tk-k">def</span> <span class="tk-f">lambda_handler</span>(event, context):</td></tr>
+<tr class="hunk"><td colspan="4">@@ -19,6 +22,10 @@</td></tr>
+<tr><td class="ln">19</td><td class="ln">22</td><td class="mark"></td><td class="code">    <span class="tk-k">if</span> <span class="tk-k">not</span> order.<span class="tk-f">get</span>(<span class="tk-s">&quot;items&quot;</span>):</td></tr>
+<tr><td class="ln">20</td><td class="ln">23</td><td class="mark"></td><td class="code">        <span class="tk-k">return</span> {<span class="tk-s">&quot;statusCode&quot;</span>: <span class="tk-n">400</span>, <span class="tk-s">&quot;body&quot;</span>: json.<span class="tk-f">dumps</span>({<span class="tk-s">&quot;error&quot;</span>: <span class="tk-s">&quot;order has no items&quot;</span>})}</td></tr>
+<tr><td class="ln">21</td><td class="ln">24</td><td class="mark"></td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">25</td><td class="mark">+</td><td class="code">    <span class="tk-k">if</span> <span class="tk-f">len</span>(order[<span class="tk-s">&quot;items&quot;</span>]) &gt; MAX_ITEMS:</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">26</td><td class="mark">+</td><td class="code">        <span class="tk-k">return</span> {<span class="tk-s">&quot;statusCode&quot;</span>: <span class="tk-n">422</span>, <span class="tk-s">&quot;body&quot;</span>: json.<span class="tk-f">dumps</span>({<span class="tk-s">&quot;error&quot;</span>: <span class="tk-s">&quot;too many items&quot;</span>})}</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">27</td><td class="mark">+</td><td class="code"></td></tr>
+<tr><td class="ln">22</td><td class="ln">28</td><td class="mark"></td><td class="code">    <span class="tk-f">put_order</span>(table, order)</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">29</td><td class="mark">+</td><td class="code">    sqs.<span class="tk-f">send_message</span>(QueueUrl=QUEUE_URL, MessageBody=json.<span class="tk-f">dumps</span>(order))</td></tr>
+<tr><td class="ln">23</td><td class="ln">30</td><td class="mark"></td><td class="code"></td></tr>
+<tr><td class="ln">24</td><td class="ln">31</td><td class="mark"></td><td class="code">    <span class="tk-k">return</span> {<span class="tk-s">&quot;statusCode&quot;</span>: <span class="tk-n">201</span>, <span class="tk-s">&quot;body&quot;</span>: json.<span class="tk-f">dumps</span>({<span class="tk-s">&quot;id&quot;</span>: order[<span class="tk-s">&quot;id&quot;</span>]})}</td></tr>
 </table></div>
 </details>
 <details class="file" data-path="requirements.txt " data-vendor="0">
 <summary>
 <span class="chip modified">modified</span>
-<span class="path">requirements.txt</span>
+<span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">requirements.txt</span></span>
 <span class="stat"><span class="add">+2</span> <span class="del">−1</span> <span style="color:var(--muted)">+17 B</span></span>
 </summary>
 <div class="diff"><table>
-<tr class="hunk"><td colspan="3">@@ -1 +1,2 @@</td></tr>
-<tr class="del"><td class="ln">1</td><td class="ln"></td><td class="code">boto3==1.34.0</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="code">boto3==1.35.20</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">2</td><td class="code">pydantic==2.9.0</td></tr>
+<tr class="hunk"><td colspan="4">@@ -1 +1,2 @@</td></tr>
+<tr class="del"><td class="ln">1</td><td class="ln"></td><td class="mark">−</td><td class="code">boto3==1.34.0</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="mark">+</td><td class="code">boto3==1.35.20</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">2</td><td class="mark">+</td><td class="code">pydantic==2.9.0</td></tr>
 </table></div>
 </details>
 <details class="file" data-path="config.py " data-vendor="0">
 <summary>
 <span class="chip added">added</span>
-<span class="path">config.py</span>
+<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">config.py</span></span>
 <span class="stat"><span class="add">+10</span> <span style="color:var(--muted)">+235 B</span></span>
 </summary>
 <div class="diff"><table>
-<tr class="hunk"><td colspan="3">@@ -0,0 +1,10 @@</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="code">&quot;&quot;&quot;Runtime configuration.</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">2</td><td class="code"></td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="code">TODO: move these to Secrets Manager before this goes anywhere near production.</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">4</td><td class="code">&quot;&quot;&quot;</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">5</td><td class="code"></td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">6</td><td class="code">AWS_ACCESS_KEY_ID = &quot;AKIA••••••••••••••••&quot;</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">7</td><td class="code">STRIPE_API_KEY = &quot;sk_l••••••••••••••••••••••••••••&quot;</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">8</td><td class="code">DEBUG = True</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">9</td><td class="code"></td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">10</td><td class="code">MAX_ITEMS = 50</td></tr>
+<tr class="hunk"><td colspan="4">@@ -0,0 +1,10 @@</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="mark">+</td><td class="code"><span class="tk-s">&quot;&quot;&quot;Runtime configuration.</span></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">2</td><td class="mark">+</td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="mark">+</td><td class="code">TODO: move these to Secrets Manager before this goes anywhere near production.</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">4</td><td class="mark">+</td><td class="code"><span class="tk-s">&quot;&quot;&quot;</span></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">5</td><td class="mark">+</td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">6</td><td class="mark">+</td><td class="code">AWS_ACCESS_KEY_ID = <span class="tk-s">&quot;AKIA••••••••••••••••&quot;</span></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">7</td><td class="mark">+</td><td class="code">STRIPE_API_KEY = <span class="tk-s">&quot;sk_l••••••••••••••••••••••••••••&quot;</span></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">8</td><td class="mark">+</td><td class="code">DEBUG = <span class="tk-t">True</span></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">9</td><td class="mark">+</td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">10</td><td class="mark">+</td><td class="code">MAX_ITEMS = <span class="tk-n">50</span></td></tr>
 </table></div>
 </details>
 <details class="file" data-path="helpers/__init__.py " data-vendor="0">
 <summary>
 <span class="chip added">added</span>
-<span class="path">helpers/__init__.py</span>
+<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">helpers/__init__.py</span></span>
 <span class="stat"></span>
 </summary>
 <div class="note">No line diff shown (file is empty). 0 B → 0 B.</div>
@@ -205,52 +260,52 @@ footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border
 <details class="file" data-path="helpers/db.py db.py" data-vendor="0">
 <summary>
 <span class="chip renamed">renamed</span>
-<span class="path">db.py → helpers/db.py</span>
+<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">db.py → helpers/db.py</span></span>
 <span class="stat"><span class="add">+1</span> <span style="color:var(--muted)">+33 B</span></span>
 </summary>
 <div class="diff"><table>
-<tr class="hunk"><td colspan="3">@@ -9,5 +9,6 @@</td></tr>
-<tr><td class="ln">9</td><td class="ln">9</td><td class="code">            &quot;id&quot;: order[&quot;id&quot;],</td></tr>
-<tr><td class="ln">10</td><td class="ln">10</td><td class="code">            &quot;items&quot;: order[&quot;items&quot;],</td></tr>
-<tr><td class="ln">11</td><td class="ln">11</td><td class="code">            &quot;total&quot;: Decimal(str(order[&quot;total&quot;])),</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">12</td><td class="code">            &quot;status&quot;: &quot;PENDING&quot;,</td></tr>
-<tr><td class="ln">12</td><td class="ln">13</td><td class="code">        }</td></tr>
-<tr><td class="ln">13</td><td class="ln">14</td><td class="code">    )</td></tr>
+<tr class="hunk"><td colspan="4">@@ -9,5 +9,6 @@</td></tr>
+<tr><td class="ln">9</td><td class="ln">9</td><td class="mark"></td><td class="code">            <span class="tk-s">&quot;id&quot;</span>: order[<span class="tk-s">&quot;id&quot;</span>],</td></tr>
+<tr><td class="ln">10</td><td class="ln">10</td><td class="mark"></td><td class="code">            <span class="tk-s">&quot;items&quot;</span>: order[<span class="tk-s">&quot;items&quot;</span>],</td></tr>
+<tr><td class="ln">11</td><td class="ln">11</td><td class="mark"></td><td class="code">            <span class="tk-s">&quot;total&quot;</span>: <span class="tk-f">Decimal</span>(<span class="tk-f">str</span>(order[<span class="tk-s">&quot;total&quot;</span>])),</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">12</td><td class="mark">+</td><td class="code">            <span class="tk-s">&quot;status&quot;</span>: <span class="tk-s">&quot;PENDING&quot;</span>,</td></tr>
+<tr><td class="ln">12</td><td class="ln">13</td><td class="mark"></td><td class="code">        }</td></tr>
+<tr><td class="ln">13</td><td class="ln">14</td><td class="mark"></td><td class="code">    )</td></tr>
 </table></div>
 </details>
 <details class="file" data-path="site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/METADATA" data-vendor="1">
 <summary>
 <span class="chip renamed">renamed</span>
-<span class="path">site-packages/boto3-1.34.0.dist-info/METADATA → site-packages/boto3-1.35.20.dist-info/METADATA</span>
+<span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/boto3-1.34.0.dist-info/METADATA → site-packages/boto3-1.35.20.dist-info/METADATA</span></span>
 <span class="stat"><span class="add">+1</span> <span class="del">−1</span> <span style="color:var(--muted)">+1 B</span></span>
 </summary>
 <div class="diff"><table>
-<tr class="hunk"><td colspan="3">@@ -1,4 +1,4 @@</td></tr>
-<tr><td class="ln">1</td><td class="ln">1</td><td class="code">Metadata-Version: 2.1</td></tr>
-<tr><td class="ln">2</td><td class="ln">2</td><td class="code">Name: boto3</td></tr>
-<tr class="del"><td class="ln">3</td><td class="ln"></td><td class="code">Version: 1.34.0</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="code">Version: 1.35.20</td></tr>
-<tr><td class="ln">4</td><td class="ln">4</td><td class="code">Summary: The AWS SDK for Python</td></tr>
+<tr class="hunk"><td colspan="4">@@ -1,4 +1,4 @@</td></tr>
+<tr><td class="ln">1</td><td class="ln">1</td><td class="mark"></td><td class="code">Metadata-Version: 2.1</td></tr>
+<tr><td class="ln">2</td><td class="ln">2</td><td class="mark"></td><td class="code">Name: boto3</td></tr>
+<tr class="del"><td class="ln">3</td><td class="ln"></td><td class="mark">−</td><td class="code">Version: 1.34.0</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="mark">+</td><td class="code">Version: 1.35.20</td></tr>
+<tr><td class="ln">4</td><td class="ln">4</td><td class="mark"></td><td class="code">Summary: The AWS SDK for Python</td></tr>
 </table></div>
 </details>
 <details class="file" data-path="site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/METADATA" data-vendor="1">
 <summary>
 <span class="chip renamed">renamed</span>
-<span class="path">site-packages/botocore-1.34.0.dist-info/METADATA → site-packages/botocore-1.35.20.dist-info/METADATA</span>
+<span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/botocore-1.34.0.dist-info/METADATA → site-packages/botocore-1.35.20.dist-info/METADATA</span></span>
 <span class="stat"><span class="add">+1</span> <span class="del">−1</span> <span style="color:var(--muted)">+1 B</span></span>
 </summary>
 <div class="diff"><table>
-<tr class="hunk"><td colspan="3">@@ -1,4 +1,4 @@</td></tr>
-<tr><td class="ln">1</td><td class="ln">1</td><td class="code">Metadata-Version: 2.1</td></tr>
-<tr><td class="ln">2</td><td class="ln">2</td><td class="code">Name: botocore</td></tr>
-<tr class="del"><td class="ln">3</td><td class="ln"></td><td class="code">Version: 1.34.0</td></tr>
-<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="code">Version: 1.35.20</td></tr>
-<tr><td class="ln">4</td><td class="ln">4</td><td class="code">Summary: Low-level, data-driven core of boto 3</td></tr>
+<tr class="hunk"><td colspan="4">@@ -1,4 +1,4 @@</td></tr>
+<tr><td class="ln">1</td><td class="ln">1</td><td class="mark"></td><td class="code">Metadata-Version: 2.1</td></tr>
+<tr><td class="ln">2</td><td class="ln">2</td><td class="mark"></td><td class="code">Name: botocore</td></tr>
+<tr class="del"><td class="ln">3</td><td class="ln"></td><td class="mark">−</td><td class="code">Version: 1.34.0</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="mark">+</td><td class="code">Version: 1.35.20</td></tr>
+<tr><td class="ln">4</td><td class="ln">4</td><td class="mark"></td><td class="code">Summary: Low-level, data-driven core of boto 3</td></tr>
 </table></div>
 </details>
 
   <footer>
-    Generated by lambda-watcher on 2026-09-04 05:59.
+    Generated by lambda-watcher on 2026-09-04 09:01.
     Content hashes ignore zip timestamps, so re-downloading unchanged code does not create a new version.
   </footer>
 </div>

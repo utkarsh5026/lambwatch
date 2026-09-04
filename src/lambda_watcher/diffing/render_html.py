@@ -14,9 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import format_ts, human_size, signed
+from . import icons
 from .compare import FileChange, VersionDiff
+from .highlight import highlight, language_of
 
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+ICON_CSS = icons.css()
 
 CSS = """
 :root {
@@ -27,6 +31,10 @@ CSS = """
   --del-bg: #fdeaec; --del-fg: #7d1220; --del-gutter: #f7ced4;
   --meta-bg: #eef2f7; --chip: #e8ebef;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Syntax tokens, One Light. Numbers and constants share a colour on purpose:
+     both are literal values, and the eye reads them as the same thing. */
+  --tk-c: #8b8f97; --tk-k: #a626a4; --tk-s: #50a14f; --tk-n: #986801;
+  --tk-t: #986801; --tk-f: #4078f2; --tk-y: #0184bc;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -35,6 +43,8 @@ CSS = """
     --add-bg: #10261a; --add-fg: #6fd08c; --add-gutter: #17351f;
     --del-bg: #2a1418; --del-fg: #ff8b95; --del-gutter: #3d1a20;
     --meta-bg: #1b2129; --chip: #232a33;
+    --tk-c: #7f848e; --tk-k: #c678dd; --tk-s: #98c379; --tk-n: #d19a66;
+    --tk-t: #d19a66; --tk-f: #61afef; --tk-y: #56b6c2;
   }
 }
 * { box-sizing: border-box; }
@@ -84,18 +94,30 @@ details.file > summary { cursor: pointer; padding: 9px 12px; display: flex; gap:
   list-style: none; font-size: 13px; }
 details.file > summary::-webkit-details-marker { display: none; }
 details.file > summary:hover { background: var(--meta-bg); }
-summary .path { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; flex: 1; }
+summary .path { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
+summary .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 summary .stat { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
 .diff { background: var(--bg); border-top: 1px solid var(--border); overflow-x: auto; }
 .diff table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; }
 .diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
 .diff td.ln { width: 1%; min-width: 46px; text-align: right; color: var(--muted); user-select: none;
   background: var(--panel); border-right: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-.diff tr.add td.code { background: var(--add-bg); color: var(--add-fg); }
+.diff td.mark { width: 1%; padding: 0 2px 0 8px; text-align: center; color: var(--muted); user-select: none; }
+.diff td.code { padding-left: 6px; }
+.diff tr.add td.code, .diff tr.add td.mark { background: var(--add-bg); }
+.diff tr.add td.mark { color: var(--add-fg); }
 .diff tr.add td.ln { background: var(--add-gutter); }
-.diff tr.del td.code { background: var(--del-bg); color: var(--del-fg); }
+.diff tr.del td.code, .diff tr.del td.mark { background: var(--del-bg); }
+.diff tr.del td.mark { color: var(--del-fg); }
 .diff tr.del td.ln { background: var(--del-gutter); }
 .diff tr.hunk td { background: var(--meta-bg); color: var(--muted); font-size: 11.5px; padding: 3px 8px; }
+.tk-c { color: var(--tk-c); font-style: italic; }
+.tk-k { color: var(--tk-k); }
+.tk-s { color: var(--tk-s); }
+.tk-n { color: var(--tk-n); }
+.tk-t { color: var(--tk-t); }
+.tk-f { color: var(--tk-f); }
+.tk-y { color: var(--tk-y); }
 .note { color: var(--muted); font-size: 12.5px; padding: 8px 12px; }
 .empty { color: var(--muted); padding: 12px 0; }
 footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border);
@@ -181,6 +203,7 @@ def _diff_rows(change: FileChange) -> list[_Row]:
 
 
 def _render_file(change: FileChange) -> str:
+    lang = language_of(change.path, change.lang)
     title = (
         f"{_esc(change.old_path)} → {_esc(change.path)}"
         if change.kind == "renamed" and change.old_path
@@ -199,7 +222,8 @@ def _render_file(change: FileChange) -> str:
         f'data-vendor="{1 if change.is_vendor else 0}">',
         "<summary>",
         f'<span class="chip {_esc(change.kind)}">{_esc(change.kind)}</span>',
-        f'<span class="path">{title}</span>',
+        f'<span class="path">{icons.file_icon(change.path, lang)}'
+        f'<span class="p">{title}</span></span>',
         f'<span class="stat">{stat}</span>',
         "</summary>",
     ]
@@ -208,14 +232,20 @@ def _render_file(change: FileChange) -> str:
         parts.append('<div class="diff"><table>')
         for row in _diff_rows(change):
             if row.css == "hunk":
-                parts.append(f'<tr class="hunk"><td colspan="3">{_esc(row.text)}</td></tr>')
+                parts.append(f'<tr class="hunk"><td colspan="4">{_esc(row.text)}</td></tr>')
                 continue
             css = f' class="{row.css}"' if row.css in ("add", "del") else ""
+            # The sign lives in its own unselectable cell so that copying a
+            # block of the diff yields the code, not code with markers glued on.
+            mark = {"add": "+", "del": "\u2212"}.get(row.css, "")
+            # `\ No newline at end of file` is diff's own note, not the file's.
+            code = _esc(row.text) if row.css == "meta" else highlight(row.text, lang)
             parts.append(
                 f"<tr{css}>"
                 f'<td class="ln">{row.old_no}</td>'
                 f'<td class="ln">{row.new_no}</td>'
-                f'<td class="code">{_esc(row.text)}</td>'
+                f'<td class="mark">{mark}</td>'
+                f'<td class="code">{code}</td>'
                 "</tr>"
             )
         parts.append("</table></div>")
@@ -387,9 +417,10 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(title)}</title>
-<style>{CSS}</style>
+<style>{CSS}{ICON_CSS}</style>
 </head>
 <body>
+{icons.sprite()}
 <div class="wrap">
   <header class="top">
     <h1>{_esc(diff.function_name)} <span class="ver">v{diff.a_seq:04d} → v{diff.b_seq:04d}</span></h1>

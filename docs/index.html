@@ -646,7 +646,7 @@
      )</pre>
     </div>
 
-    <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step. It is one file with the stylesheet inlined, so it survives being emailed or dropped in a bucket:</p>
+    <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step. It is one file with the stylesheet inlined — the file icons are drawn into the page and the syntax highlighting is computed when it is written, so nothing is fetched — and it survives being emailed or dropped in a bucket:</p>
     <figure class="shot">
       <img src="examples/report-preview.png" width="2320" height="1520" loading="lazy"
            alt="The HTML diff report for order-processor v0001 to v0002: summary tiles for files changed, lines, dependencies, package size, new findings and vendored files; then tables for dependencies, configuration impact and new findings.">
