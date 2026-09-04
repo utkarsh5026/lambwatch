@@ -479,8 +479,10 @@ def main() -> int:
 
     capture("search", "lambda-watcher search boto3", cli.run("search", "boto3"))
     capture("log", "lambda-watcher log", cli.run("log"))
-    capture("path", "lambda-watcher path order-processor --git",
-            wide.run("path", "order-processor", "--git"))
+    capture("path", "lambda-watcher path order-processor --repo",
+            wide.run("path", "order-processor", "--repo"))
+    capture("open", "lambda-watcher open order-processor --print",
+            wide.run("open", "order-processor", "--print"))
     capture("git", "lambda-watcher git order-processor log --oneline",
             cli.run("git", "order-processor", "log", "--oneline"))
 

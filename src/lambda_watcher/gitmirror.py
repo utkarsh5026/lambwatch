@@ -3,7 +3,9 @@
 This is the shortest path to a review workflow you already know: every version
 is a commit tagged ``v0007``, so ``git diff v0002 v0010``, ``git log -p``, VS
 Code's diff viewer and any git GUI all work on a single function's history
-without ten unrelated Lambdas mixed into the same repo.
+without ten unrelated Lambdas mixed into the same repo. It lives at
+``functions/<slug>/repo/``, and ``lambda-watcher open`` hands that folder to an
+editor.
 """
 
 from __future__ import annotations

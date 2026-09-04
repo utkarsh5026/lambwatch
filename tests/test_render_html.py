@@ -13,7 +13,7 @@ import re
 
 import pytest
 
-from lambda_watcher.diffing import icons
+from lambda_watcher.diffing import icons, intraline
 from lambda_watcher.diffing.highlight import (
     FAMILY_BY_LANG,
     GRAMMARS,
@@ -214,6 +214,76 @@ def test_a_row_that_does_not_match_its_file_falls_back_instead_of_borrowing() ->
 def test_diff_metadata_is_never_highlighted_as_code() -> None:
     row = _Row("meta", "", "", "\\ No newline at end of file")
     assert _row_code(row, "python", None, None) == html_lib.escape(row.text, quote=True)
+
+
+# -------------------------------------------------------------- intra-line
+def test_only_the_words_that_changed_are_marked() -> None:
+    before, after = intraline.word_diff(
+        'QUEUE_URL = os.environ["TABLE"]', 'QUEUE_URL = os.environ["QUEUE"]'
+    )
+    assert before == after == [(24, 29)]  # just the table name inside the quotes
+
+
+def test_lines_with_little_in_common_are_left_alone() -> None:
+    # Marking these would scatter colour over the handful of characters two
+    # unrelated lines happen to share, which is worse than not marking at all.
+    assert intraline.word_diff("import os", "TOTAL = compute(rows, key)") == ([], [])
+
+
+def test_a_line_marked_almost_end_to_end_is_left_plain() -> None:
+    # Two lines can share enough tokens to pair — the brackets, the comma —
+    # while nearly every character between them differs. Marking 90% of a line
+    # tells the reader no more than the row's own colour already did.
+    assert intraline.word_diff("[a, b]", "[qqqqqqqqqqqq, wwwwwwwwwwww]") == ([], [])
+    # But a long value replacing a short one still gets marked: the part that
+    # did not change is what makes the part that did stand out.
+    assert intraline.word_diff("a = 1", "a = 22222222222222222222") != ([], [])
+
+
+def test_a_rewrite_pairs_with_the_line_it_rewrote_not_the_nearest_one() -> None:
+    # `pydantic` is added alongside a `boto3` bump. Pairing by position would
+    # mark the boto3 line against pydantic and invent a change in every column.
+    pairs = intraline.pair_rows(["boto3==1.34.0"], ["pydantic==2.9.0", "boto3==1.35.20"])
+    assert list(pairs) == [(0, 1)]
+
+
+def test_nothing_pairs_when_there_is_nothing_to_pair_with() -> None:
+    assert intraline.pair_rows([], ["a = 1"]) == {}
+    assert intraline.pair_rows(["a = 1"], []) == {}
+    assert intraline.pair_rows(["a = 1"] * 99, ["a = 2"] * 99) == {}
+
+
+@pytest.mark.parametrize("line, lang", CORPUS)
+def test_marking_a_line_never_breaks_out_of_its_escaping(line: str, lang: str) -> None:
+    # `mark` is handed markup and plain-text offsets, and has to walk the two
+    # together. Every character of the file has to survive that walk unchanged
+    # and still escaped, whatever the highlighter wrapped it in.
+    rendered = highlight(line, lang)
+    spans = [(i, i + 3) for i in range(0, max(len(line) - 3, 1), 7)]
+    marked = intraline.mark(rendered, spans)
+    assert _TAG.sub("", marked) == html_lib.escape(line, quote=True)
+    assert not re.search(r"<(?!/?span\b)", marked)
+
+
+def test_a_mark_reaching_across_a_syntax_span_stays_well_formed() -> None:
+    rendered = highlight("import os", "python")
+    assert "</span>" in rendered  # the keyword is wrapped; the mark must cross it
+    marked = intraline.mark(rendered, [(3, 8)])
+    assert marked.count("<span") == marked.count("</span>")
+    assert _TAG.sub("", marked) == "import os"
+
+
+def test_an_entity_is_one_character_to_a_mark_not_five() -> None:
+    # `&quot;` is six characters of markup standing for one of the file. A mark
+    # that counted the markup would drift left for the rest of the line.
+    rendered = highlight('x = "ab"', "python")
+    assert "&quot;" in rendered
+    assert _TAG.sub("", intraline.mark(rendered, [(5, 6)])) == html_lib.escape('x = "ab"', quote=True)
+    assert '<span class="wd">a</span>' in intraline.mark(rendered, [(5, 6)])
+
+
+def test_marks_reach_the_page() -> None:
+    assert ".wd { " in CSS
 
 
 # ------------------------------------------------------------------- icons

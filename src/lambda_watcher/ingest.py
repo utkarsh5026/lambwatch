@@ -392,7 +392,7 @@ class Ingestor:
         )
         try:
             commit_version(
-                self.store.git_dir(slug), code_dir, self.cfg.git_mirror, seq, message, now,
+                self.store.repo_dir(slug), code_dir, self.cfg.git_mirror, seq, message, now,
                 vendor_globs=self.cfg.analysis.vendor_globs,
             )
         except (GitUnavailable, RuntimeError, OSError) as exc:

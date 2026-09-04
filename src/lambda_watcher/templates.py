@@ -91,8 +91,9 @@ diff:
   ignore_globs: ["**/*.pyc", "**/*.so", "**/*.map"]
 
 git_mirror:
-  # Keeps one git repo per function, one commit per version, tagged v0001...
-  # so `git diff v0002 v0010` and any git GUI just work.
+  # Keeps one git repo per function under functions/<name>/repo/, one commit
+  # per version, tagged v0001... so `git diff v0002 v0010`, `lw open` and any
+  # git GUI just work.
   enabled: true
   author_name: lambda-watcher
   author_email: lambda-watcher@localhost
@@ -101,6 +102,10 @@ git_mirror:
 
 notify:
   enabled: true
+
+# What `lw open` launches on a folder. Left empty, it looks for VS Code and
+# friends on PATH. $LAMBDA_WATCHER_EDITOR overrides this.
+editor: ""
 
 log_level: INFO
 """

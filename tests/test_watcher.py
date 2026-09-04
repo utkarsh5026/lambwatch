@@ -187,7 +187,7 @@ def test_git_mirror_records_one_commit_per_version(cfg, db, downloads: Path):
     ingestor.ingest(_write_zip(downloads / "fn.zip", {"lambda_function.py": PY_V1}))
     ingestor.ingest(_write_zip(downloads / "fn.zip", {"lambda_function.py": PY_V2}))
 
-    repo = Path(cfg.functions_dir) / "fn" / "git"
+    repo = Path(cfg.root) / "repos" / "fn"
     assert (repo / ".git").exists()
 
     tags = subprocess.run(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -156,6 +157,58 @@ def _open_path(path: Path) -> None:
             subprocess.run(["xdg-open", str(path)], check=False)
     except OSError as exc:
         err_console.print(f"[yellow]could not open {path}: {exc}[/yellow]")
+
+
+#: Editors that take a folder as their argument, in the order they are tried.
+#: Everything here is VS Code or a fork of it except the last two, so `--reuse`
+#: (VS Code's `-r`) applies to all but those.
+_EDITORS = ("code", "cursor", "windsurf", "code-insiders", "codium", "vscodium", "zed", "subl")
+_REUSE_SUPPORTED = {"code", "cursor", "windsurf", "code-insiders", "codium", "vscodium"}
+
+
+def _resolve_editor(cfg: Config, override: str | None) -> list[str]:
+    """The command to launch on a folder, as argv.
+
+    An explicit choice — the flag, then ``editor`` in the config (which
+    ``LAMBDA_WATCHER_EDITOR`` overrides) — is used as given and is an error when
+    it is not installed, because silently opening a different editor than the
+    one you asked for is worse than the error. With no choice made, the first
+    of ``_EDITORS`` on PATH wins.
+    """
+    chosen = (override or cfg.editor).strip()
+    if chosen:
+        argv = shlex.split(chosen)
+        if not argv:
+            _fail("the editor command is empty")
+        if not shutil.which(argv[0]):
+            _fail(f"{argv[0]!r} is not on PATH")
+        return argv
+    for candidate in _EDITORS:
+        found = shutil.which(candidate)
+        if found:
+            return [found]
+    _fail(
+        "no editor found on PATH (looked for " + ", ".join(_EDITORS) + "). "
+        "Pass --editor CMD, set `editor:` in the config, or use `lambda-watcher path` "
+        "and open the folder yourself."
+    )
+    return []  # unreachable; _fail exits
+
+
+def _launch_editor(argv: list[str], target: Path, reuse: bool) -> None:
+    name = Path(argv[0]).stem
+    if reuse:
+        if name in _REUSE_SUPPORTED:
+            argv = [*argv, "-r"]
+        else:
+            err_console.print(f"[yellow]--reuse means nothing to {name}; ignoring it[/yellow]")
+    try:
+        proc = subprocess.run([*argv, str(target)], check=False)
+    except OSError as exc:
+        _fail(f"could not launch {name}: {exc}")
+        return
+    if proc.returncode != 0:
+        _fail(f"{name} exited with status {proc.returncode}", proc.returncode)
 
 
 def _version_callback(value: bool) -> None:
@@ -676,6 +729,16 @@ def rename(
         for version in db.list_versions(int(row["id"])):
             updated = version["dir"].replace(f"functions/{old_slug}/", f"functions/{new_slug}/", 1)
             db.conn.execute("UPDATE versions SET dir = ? WHERE id = ?", (updated, version["id"]))
+    if old_slug != new_slug:
+        # The mirror lives outside the function directory, so it does not move
+        # with it — and its folder name is what an editor puts in the sidebar.
+        old_repo = store.repo_dir(old_slug)
+        new_repo = cfg.repos_dir / new_slug
+        if old_repo.exists() and not new_repo.exists():
+            try:
+                old_repo.rename(new_repo)
+            except OSError as exc:
+                err_console.print(f"[yellow]could not move {old_repo} to {new_repo}: {exc}[/yellow]")
 
     db.rename_function(int(row["id"]), new_name, new_slug)
     if alias:
@@ -731,6 +794,9 @@ def merge(
                 if not destination.exists():
                     shutil.move(str(version_dir), str(destination))
         shutil.rmtree(src_dir, ignore_errors=True)
+    # The target's mirror no longer matches the renumbered versions, but the
+    # source's belongs to a function that no longer exists at all.
+    shutil.rmtree(store.repo_dir(src["slug"]), ignore_errors=True)
 
     # Directory names still carry the old sequence numbers; re-point the index.
     for version in db.list_versions(int(dst["id"])):
@@ -785,6 +851,9 @@ def remove(
         if not confirm:
             raise typer.Abort()
     shutil.rmtree(store.function_dir(row["slug"]), ignore_errors=True)
+    # The mirror is a second full copy of the code; leaving it behind would make
+    # "deleted" a lie.
+    shutil.rmtree(store.repo_dir(row["slug"]), ignore_errors=True)
     db.delete_function(int(row["id"]))
     console.print(f"[green]deleted[/green] {row['name']}")
 
@@ -825,11 +894,81 @@ def export(
         console.print(f"[green]copied[/green] {target}")
 
 
+@app.command("open")
+def open_in_editor(
+    function: str = typer.Argument(..., help="Function name, slug or id."),
+    version: Optional[str] = typer.Argument(
+        None, help="Open this version's files alone instead of the whole repo."
+    ),
+    editor: Optional[str] = typer.Option(
+        None, "--editor", "-e",
+        help="Editor command to launch (default: `editor` in the config, else VS Code and friends on PATH).",
+    ),
+    reuse: bool = typer.Option(
+        False, "--reuse", "-r", help="Reuse the editor's current window instead of opening a new one."
+    ),
+    print_only: bool = typer.Option(
+        False, "--print", help="Print the folder that would be opened and launch nothing."
+    ),
+) -> None:
+    """Open a function's archived code in your editor.
+
+    With no version, this opens the git mirror: a real working tree holding the
+    latest version, with every earlier one a commit tagged `v0001`, `v0002`, …
+    so the editor's own history, blame and diff views cover the whole archive.
+    Name a version and you get that version's files on their own instead.
+    """
+    cfg = _cfg()
+    db = _open_db(cfg)
+    store = Store(cfg)
+    row = _resolve_function(db, function)
+
+    note = ""
+    if version is not None:
+        seq = _resolve_seq(db, int(row["id"]), version)
+        target = store.resolve_version_dir(_version_or_fail(db, int(row["id"]), seq)["dir"]) / "code"
+        if not target.exists():
+            _fail(f"the extracted code for v{seq:04d} is missing at {target}")
+        subtitle = f"v{seq:04d} only — no history, just the files"
+    else:
+        target = store.repo_dir(row["slug"])
+        if (target / ".git").is_dir():
+            seqs = [int(v["seq"]) for v in db.list_versions(int(row["id"]))]
+            subtitle = (
+                f"{len(seqs)} version(s), tagged v{min(seqs):04d}…v{max(seqs):04d}; "
+                f"the working tree is v{max(seqs):04d}"
+                if seqs else "no versions archived yet"
+            )
+        else:
+            # No mirror to open, but the request was to look at the code, and
+            # the newest version is the closest thing to what was asked for.
+            seq = _resolve_seq(db, int(row["id"]), "latest")
+            target = store.resolve_version_dir(_version_or_fail(db, int(row["id"]), seq)["dir"]) / "code"
+            subtitle = f"v{seq:04d} only — no history, just the files"
+            note = (
+                f"no git mirror for {row['name']} yet. Set `git_mirror.enabled: true` in "
+                f"{_CONFIG_PATH or default_config_path()} and re-ingest to get one."
+            )
+
+    if note:
+        err_console.print(f"[yellow]{note}[/yellow]")
+    if print_only:
+        print(target)
+        return
+
+    argv = _resolve_editor(cfg, editor)
+    _launch_editor(argv, target, reuse)
+    console.print(f"[green]opened[/green] {row['name']} in {Path(argv[0]).stem} [dim]({subtitle})[/dim]")
+    console.print(f"[dim]{target}[/dim]")
+
+
 @app.command()
 def path(
     function: str = typer.Argument(...),
     version: Optional[str] = typer.Argument(None),
-    git: bool = typer.Option(False, "--git", help="Print the git mirror path instead."),
+    repo: bool = typer.Option(
+        False, "--repo", "--git", help="Print the git mirror path instead."
+    ),
     open_it: bool = typer.Option(False, "--open", help="Open it in the file manager."),
 ) -> None:
     """Print where something lives on disk (handy for `cd $(...)`)."""
@@ -837,8 +976,8 @@ def path(
     db = _open_db(cfg)
     store = Store(cfg)
     row = _resolve_function(db, function)
-    if git:
-        target = store.git_dir(row["slug"])
+    if repo:
+        target = store.repo_dir(row["slug"])
     elif version is None:
         target = store.function_dir(row["slug"])
     else:
@@ -860,7 +999,7 @@ def git(ctx: typer.Context, function: str = typer.Argument(...)) -> None:
     db = _open_db(cfg)
     store = Store(cfg)
     row = _resolve_function(db, function)
-    repo = store.git_dir(row["slug"])
+    repo = store.repo_dir(row["slug"])
     if not (repo / ".git").exists():
         _fail(
             f"no git mirror for {row['name']} at {repo}. "

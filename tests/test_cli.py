@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 import zipfile
 from importlib import reload
 from pathlib import Path
@@ -9,7 +12,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from lambda_watcher import cli
 from lambda_watcher.cli import app
+from lambda_watcher.gitmirror import git_available
 from tests.conftest import PY_V1, PY_V2
 
 runner = CliRunner()
@@ -108,6 +113,95 @@ def test_report_builds_a_browsable_history(archived: Path):
     index = archived / "reports" / "order-processor" / "index.html"
     assert index.exists()
     assert (archived / "reports" / "order-processor" / "v0001-v0002.html").exists()
+
+
+# A real executable, so `open` resolves it the way it resolves `code`; the
+# stubbed subprocess.run below means it is never actually started.
+EDITOR = Path(sys.executable).as_posix()
+
+
+def _editor(monkeypatch) -> list[list[str]]:
+    """Record the argv `open` would launch instead of launching an editor."""
+    launched: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        launched.append([str(a) for a in argv])
+        return subprocess.CompletedProcess(list(argv), 0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    return launched
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_open_hands_the_git_mirror_to_the_editor(archived: Path, monkeypatch):
+    launched = _editor(monkeypatch)
+    result = _run("open", "order-processor", "--editor", EDITOR)
+
+    target = Path(launched[0][-1])
+    assert target == archived / "repos" / "order-processor"
+    assert (target / ".git").is_dir(), "the whole point is that it is a repo, not a copy"
+    # The folder name is what the editor shows as the workspace root, so it has
+    # to read as the function, not as "repo".
+    assert target.name == "order-processor"
+    assert "tagged v0001…v0002" in result.output
+
+
+def test_open_with_a_version_hands_over_that_versions_files(archived: Path, monkeypatch):
+    launched = _editor(monkeypatch)
+    _run("open", "order-processor", "1", "--editor", EDITOR)
+
+    target = Path(launched[0][-1])
+    assert target.name == "code" and target.parent.name.startswith("0001-")
+    assert (target / "lambda_function.py").read_text() == PY_V1
+
+
+def test_open_without_a_mirror_falls_back_to_the_newest_files(archived: Path, monkeypatch):
+    shutil.rmtree(archived / "repos" / "order-processor", ignore_errors=True)
+    launched = _editor(monkeypatch)
+    result = _run("open", "order-processor", "--editor", EDITOR)
+
+    assert Path(launched[0][-1]).parent.name.startswith("0002-")
+    assert "no git mirror" in result.output
+
+
+def test_open_print_names_the_folder_and_launches_nothing(archived: Path, monkeypatch):
+    launched = _editor(monkeypatch)
+    result = _run("open", "order-processor", "1", "--print")
+    assert not launched
+    assert result.output.strip().endswith("code")
+
+
+def test_open_refuses_an_editor_that_is_not_installed(archived: Path):
+    result = runner.invoke(app, ["open", "order-processor", "--editor", "not-a-real-editor"])
+    assert result.exit_code == 1
+    assert "not on PATH" in result.output
+
+
+@pytest.mark.parametrize("legacy_name", ["git", "repo"])
+def test_a_mirror_from_an_older_layout_moves_itself(archived: Path, legacy_name: str):
+    """Archives that kept the mirror inside the function directory still work."""
+    function = archived / "functions" / "order-processor"
+    shutil.rmtree(archived / "repos", ignore_errors=True)
+    (function / legacy_name / ".git").mkdir(parents=True)
+
+    result = _run("open", "order-processor", "--print")
+    assert Path(result.output.strip()) == archived / "repos" / "order-processor"
+    assert (archived / "repos" / "order-processor" / ".git").is_dir()
+    assert not (function / legacy_name).exists()
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_rename_takes_the_mirror_with_it(archived: Path):
+    _run("rename", "order-processor", "OrderProcessorProd")
+    assert not (archived / "repos" / "order-processor").exists()
+    assert (archived / "repos" / "OrderProcessorProd" / ".git").is_dir()
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_rm_deletes_the_mirror_too(archived: Path):
+    assert (archived / "repos" / "order-processor" / ".git").is_dir()
+    _run("rm", "order-processor", "--yes")
+    assert not (archived / "repos" / "order-processor").exists()
 
 
 def test_export_round_trips_a_version(archived: Path, tmp_path: Path):

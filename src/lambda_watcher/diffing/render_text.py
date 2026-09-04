@@ -9,7 +9,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from ..utils import human_size, signed
+from ..utils import human_size, rename_label, signed
 from .compare import VersionDiff
 
 _KIND_STYLE = {
@@ -20,6 +20,19 @@ _KIND_STYLE = {
     "mode-changed": "magenta",
 }
 _SEVERITY_STYLE = {"high": "bold red", "medium": "yellow", "low": "dim"}
+
+
+def _label(change) -> str:
+    """How one file is named in a listing.
+
+    A rename writes the two paths as one, with the part that moved in braces —
+    the alternative is 90 characters of identical path twice over, wrapped
+    across two rows, for a version number that changed in the middle.
+    """
+    if change.kind != "renamed" or not change.old_path:
+        return change.path
+    head, was, now, tail = rename_label(change.old_path, change.path)
+    return f"{head}{{{was} \u2192 {now}}}{tail}"
 
 
 def _stat_line(diff: VersionDiff) -> Text:
@@ -114,13 +127,20 @@ def render_findings(console: Console, diff: VersionDiff) -> None:
         return
     console.print()
     if diff.findings_new:
-        console.print("[bold red]New findings[/bold red]")
+        table = Table(title="New findings", title_justify="left", title_style="bold red",
+                      header_style="bold", box=None, padding=(0, 2, 0, 0), show_header=False)
+        table.add_column("", justify="right")
+        table.add_column("kind")
+        table.add_column("where", style="dim")
+        table.add_column("detail", style="dim")
         for finding in diff.findings_new[:25]:
-            style = _SEVERITY_STYLE.get(finding["severity"], "")
-            console.print(
-                f"  [{style}]{finding['severity']:>6}[/] {finding['kind']}  "
-                f"{finding['path']}:{finding['line']}  [dim]{finding['detail']}[/dim]"
+            table.add_row(
+                Text(finding["severity"], style=_SEVERITY_STYLE.get(finding["severity"], "")),
+                finding["kind"],
+                f"{finding['path']}:{finding['line']}",
+                finding["detail"],
             )
+        console.print(table)
     if diff.findings_fixed:
         console.print(f"[green]Resolved findings:[/green] {len(diff.findings_fixed)}")
 
@@ -142,10 +162,9 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
 
     marks = {"added": "+", "removed": "−", "modified": "~", "renamed": "→", "mode-changed": "m"}
     for change in diff.files[:max_files]:
-        label = change.path if change.kind != "renamed" else f"{change.old_path} → {change.path}"
         table.add_row(
             Text(marks.get(change.kind, "?"), style=_KIND_STYLE.get(change.kind, "")),
-            Text(label, style="dim" if change.is_vendor else ""),
+            Text(_label(change), style="dim" if change.is_vendor else ""),
             str(change.added_lines or ""),
             str(change.removed_lines or ""),
             signed(change.size_delta) if change.size_delta else "",
@@ -161,8 +180,8 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
         if not change.diff_lines:
             continue
         console.print()
-        title = change.path if change.kind != "renamed" else f"{change.old_path} → {change.path}"
-        console.print(Rule(f"[bold]{title}[/bold]", style=_KIND_STYLE.get(change.kind, "white")))
+        console.print(Rule(f"[bold]{_label(change)}[/bold]",
+                           style=_KIND_STYLE.get(change.kind, "white")))
         body = "\n".join(change.diff_lines)
         console.print(Syntax(body, "diff", theme="ansi_dark", word_wrap=False, background_color="default"))
         if change.truncated:

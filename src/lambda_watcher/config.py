@@ -192,6 +192,8 @@ class Config:
     diff: DiffConfig = field(default_factory=DiffConfig)
     git_mirror: GitMirrorConfig = field(default_factory=GitMirrorConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    #: Command `open` launches on a folder. Empty means "find one on PATH".
+    editor: str = ""
     log_level: str = "INFO"
 
     # -- derived paths ---------------------------------------------------
@@ -214,6 +216,10 @@ class Config:
     @property
     def reports_dir(self) -> Path:
         return self.root / "reports"
+
+    @property
+    def repos_dir(self) -> Path:
+        return self.root / "repos"
 
     @property
     def quarantine_dir(self) -> Path:
@@ -269,6 +275,7 @@ def load_config(path: Path | str | None = None) -> Config:
         diff=_from_dict(DiffConfig, data.get("diff", {})),
         git_mirror=_from_dict(GitMirrorConfig, data.get("git_mirror", {})),
         notify=_from_dict(NotifyConfig, data.get("notify", {})),
+        editor=data.get("editor", ""),
         log_level=data.get("log_level", "INFO"),
     )
     # Environment overrides make it easy to run one-off commands elsewhere.
@@ -276,4 +283,6 @@ def load_config(path: Path | str | None = None) -> Config:
         cfg.store.root = str(Path(os.environ["LAMBDA_WATCHER_HOME"]).expanduser())
     if os.environ.get("LAMBDA_WATCHER_LOG_LEVEL"):
         cfg.log_level = os.environ["LAMBDA_WATCHER_LOG_LEVEL"]
+    if os.environ.get("LAMBDA_WATCHER_EDITOR"):
+        cfg.editor = os.environ["LAMBDA_WATCHER_EDITOR"]
     return cfg
