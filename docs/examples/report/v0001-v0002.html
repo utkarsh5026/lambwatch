@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>order-processor · v0001 → v0002</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --panel: #f7f8fa; --border: #e3e6ea; --text: #1b1f24;
+  --muted: #616a76; --accent: #0b62d0;
+  --add-bg: #e7f7ec; --add-fg: #04562a; --add-gutter: #cdeed8;
+  --del-bg: #fdeaec; --del-fg: #7d1220; --del-gutter: #f7ced4;
+  --meta-bg: #eef2f7; --chip: #e8ebef;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --panel: #161b22; --border: #2a313a; --text: #e6edf3;
+    --muted: #9198a1; --accent: #58a6ff;
+    --add-bg: #10261a; --add-fg: #6fd08c; --add-gutter: #17351f;
+    --del-bg: #2a1418; --del-fg: #ff8b95; --del-gutter: #3d1a20;
+    --meta-bg: #1b2129; --chip: #232a33;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+a { color: var(--accent); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 80px; }
+header.top { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 20px; }
+h1 { font-size: 21px; margin: 0 0 4px; letter-spacing: -0.01em; }
+h1 .ver { color: var(--accent); font-variant-numeric: tabular-nums; }
+.sub { color: var(--muted); font-size: 13px; }
+h2 { font-size: 15px; margin: 28px 0 10px; letter-spacing: -0.01em; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0 4px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.card .v { font-size: 20px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.add { color: var(--add-fg); } .del { color: var(--del-fg); }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .06em; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+table.grid td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.grid tr:last-child td { border-bottom: none; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--chip);
+  font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.chip.added { background: var(--add-gutter); color: var(--add-fg); }
+.chip.removed { background: var(--del-gutter); color: var(--del-fg); }
+.chip.modified { background: var(--meta-bg); color: var(--accent); }
+.chip.renamed, .chip.changed { background: var(--meta-bg); color: var(--muted); }
+.chip.high { background: var(--del-gutter); color: var(--del-fg); }
+.chip.medium { background: #f4e6c9; color: #6b4a06; }
+@media (prefers-color-scheme: dark) { .chip.medium { background: #33290f; color: #e8c46a; } }
+.chip.low { background: var(--chip); color: var(--muted); }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 18px 0 8px;
+  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 5; border-bottom: 1px solid var(--border); }
+.toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; }
+.toolbar input[type=search] { flex: 1 1 200px; min-width: 140px; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px; }
+.toolbar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.toolbar button { padding: 7px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); font-size: 13px; cursor: pointer; }
+.toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+details.file { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; background: var(--panel); }
+details.file > summary { cursor: pointer; padding: 9px 12px; display: flex; gap: 10px; align-items: center;
+  list-style: none; font-size: 13px; }
+details.file > summary::-webkit-details-marker { display: none; }
+details.file > summary:hover { background: var(--meta-bg); }
+summary .path { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; flex: 1; }
+summary .stat { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
+.diff { background: var(--bg); border-top: 1px solid var(--border); overflow-x: auto; }
+.diff table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; }
+.diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
+.diff td.ln { width: 1%; min-width: 46px; text-align: right; color: var(--muted); user-select: none;
+  background: var(--panel); border-right: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.diff tr.add td.code { background: var(--add-bg); color: var(--add-fg); }
+.diff tr.add td.ln { background: var(--add-gutter); }
+.diff tr.del td.code { background: var(--del-bg); color: var(--del-fg); }
+.diff tr.del td.ln { background: var(--del-gutter); }
+.diff tr.hunk td { background: var(--meta-bg); color: var(--muted); font-size: 11.5px; padding: 3px 8px; }
+.note { color: var(--muted); font-size: 12.5px; padding: 8px 12px; }
+.empty { color: var(--muted); padding: 12px 0; }
+footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 12px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>order-processor <span class="ver">v0001 → v0002</span></h1>
+    <div class="sub">
+      v0001 archived 2026-09-04 05:59 · v0002 archived 2026-09-04 05:59
+      · 2 added, 2 modified, 3 renamed, 52 vendored
+    </div>
+  </header>
+
+  <div class="cards">
+<div class="card"><div class="k">Files changed</div><div class="v">7</div></div>
+<div class="card"><div class="k">Lines</div><div class="v">+24 / −5</div></div>
+<div class="card"><div class="k">Dependencies</div><div class="v">3</div></div>
+<div class="card"><div class="k">Package size</div><div class="v">8.9 KB</div><div class="sub" style="font-size:11px">+782 B</div></div>
+<div class="card"><div class="k">New findings</div><div class="v">3</div></div>
+<div class="card"><div class="k">Vendored files</div><div class="v">52</div><div class="sub" style="font-size:11px">re-run with --vendor to see them</div></div>
+</div>
+  <h2>Dependencies</h2><table class='grid'><thead><tr><th></th><th>package</th><th>from</th><th>to</th><th>manager</th><th>origin</th></tr></thead><tbody><tr><td><span class="chip added">added</span></td><td class="mono">pydantic</td><td class="mono del">—</td><td class="mono add">2.9.0</td><td>pip</td><td>installed</td></tr><tr><td><span class="chip changed">changed</span></td><td class="mono">boto3</td><td class="mono del">1.34.0</td><td class="mono add">1.35.20</td><td>pip</td><td>installed</td></tr><tr><td><span class="chip changed">changed</span></td><td class="mono">botocore</td><td class="mono del">1.34.0</td><td class="mono add">1.35.20</td><td>pip</td><td>installed</td></tr></tbody></table>
+  <h2>Configuration impact</h2><table class='grid'><tbody><tr><td style='width:200px'>Environment variables added</td><td><span class="chip added">QUEUE_URL</span><div class="sub" style="margin-top:4px">These must exist in the function&#x27;s environment configuration before you deploy.</div></td></tr><tr><td style='width:200px'>AWS services added</td><td><span class="chip added">sqs</span><div class="sub" style="margin-top:4px">The execution role may need new IAM permissions.</div></td></tr></tbody></table>
+  <h2>New findings</h2><table class='grid'><thead><tr><th>severity</th><th>kind</th><th>where</th><th>detail</th></tr></thead><tbody><tr><td><span class="chip high">high</span></td><td>aws-access-key-id</td><td class="mono">config.py:6</td><td class="mono">AKIA…LE (20 chars)</td></tr><tr><td><span class="chip high">high</span></td><td>stripe-key</td><td class="mono">config.py:7</td><td class="mono">sk_l…dc (32 chars)</td></tr><tr><td><span class="chip low">low</span></td><td>debug-flag</td><td class="mono">config.py:8</td><td class="mono">DEBUG = True</td></tr></tbody></table>
+
+  <h2>File changes</h2>
+  <div class="toolbar">
+    <input type="search" id="filter" placeholder="Filter by path…" autocomplete="off">
+    <label><input type="checkbox" id="vendor" checked> show vendored files</label>
+    <button type="button" id="expand-all">Expand all</button>
+    <button type="button" id="collapse-all">Collapse all</button>
+    <span class="sub" id="shown-count"></span>
+  </div>
+  <details class="file" data-path="lambda_function.py " data-vendor="0">
+<summary>
+<span class="chip modified">modified</span>
+<span class="path">lambda_function.py</span>
+<span class="stat"><span class="add">+9</span> <span class="del">−2</span> <span style="color:var(--muted)">+322 B</span></span>
+</summary>
+<div class="diff"><table>
+<tr class="hunk"><td colspan="3">@@ -1,16 +1,19 @@</td></tr>
+<tr class="del"><td class="ln">1</td><td class="ln"></td><td class="code">&quot;&quot;&quot;Validate an incoming order and record it.&quot;&quot;&quot;</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="code">&quot;&quot;&quot;Validate an incoming order, record it, and queue it for fulfilment.&quot;&quot;&quot;</td></tr>
+<tr><td class="ln">2</td><td class="ln">2</td><td class="code"></td></tr>
+<tr><td class="ln">3</td><td class="ln">3</td><td class="code">import json</td></tr>
+<tr><td class="ln">4</td><td class="ln">4</td><td class="code">import os</td></tr>
+<tr><td class="ln">5</td><td class="ln">5</td><td class="code"></td></tr>
+<tr><td class="ln">6</td><td class="ln">6</td><td class="code">import boto3</td></tr>
+<tr><td class="ln">7</td><td class="ln">7</td><td class="code"></td></tr>
+<tr class="del"><td class="ln">8</td><td class="ln"></td><td class="code">from db import put_order</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">8</td><td class="code">from config import MAX_ITEMS</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">9</td><td class="code">from helpers.db import put_order</td></tr>
+<tr><td class="ln">9</td><td class="ln">10</td><td class="code"></td></tr>
+<tr><td class="ln">10</td><td class="ln">11</td><td class="code">TABLE_NAME = os.environ[&quot;TABLE_NAME&quot;]</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">12</td><td class="code">QUEUE_URL = os.environ[&quot;QUEUE_URL&quot;]</td></tr>
+<tr><td class="ln">11</td><td class="ln">13</td><td class="code"></td></tr>
+<tr><td class="ln">12</td><td class="ln">14</td><td class="code">dynamodb = boto3.resource(&quot;dynamodb&quot;)</td></tr>
+<tr><td class="ln">13</td><td class="ln">15</td><td class="code">table = dynamodb.Table(TABLE_NAME)</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">16</td><td class="code">sqs = boto3.client(&quot;sqs&quot;)</td></tr>
+<tr><td class="ln">14</td><td class="ln">17</td><td class="code"></td></tr>
+<tr><td class="ln">15</td><td class="ln">18</td><td class="code"></td></tr>
+<tr><td class="ln">16</td><td class="ln">19</td><td class="code">def lambda_handler(event, context):</td></tr>
+<tr class="hunk"><td colspan="3">@@ -19,6 +22,10 @@</td></tr>
+<tr><td class="ln">19</td><td class="ln">22</td><td class="code">    if not order.get(&quot;items&quot;):</td></tr>
+<tr><td class="ln">20</td><td class="ln">23</td><td class="code">        return {&quot;statusCode&quot;: 400, &quot;body&quot;: json.dumps({&quot;error&quot;: &quot;order has no items&quot;})}</td></tr>
+<tr><td class="ln">21</td><td class="ln">24</td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">25</td><td class="code">    if len(order[&quot;items&quot;]) &gt; MAX_ITEMS:</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">26</td><td class="code">        return {&quot;statusCode&quot;: 422, &quot;body&quot;: json.dumps({&quot;error&quot;: &quot;too many items&quot;})}</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">27</td><td class="code"></td></tr>
+<tr><td class="ln">22</td><td class="ln">28</td><td class="code">    put_order(table, order)</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">29</td><td class="code">    sqs.send_message(QueueUrl=QUEUE_URL, MessageBody=json.dumps(order))</td></tr>
+<tr><td class="ln">23</td><td class="ln">30</td><td class="code"></td></tr>
+<tr><td class="ln">24</td><td class="ln">31</td><td class="code">    return {&quot;statusCode&quot;: 201, &quot;body&quot;: json.dumps({&quot;id&quot;: order[&quot;id&quot;]})}</td></tr>
+</table></div>
+</details>
+<details class="file" data-path="requirements.txt " data-vendor="0">
+<summary>
+<span class="chip modified">modified</span>
+<span class="path">requirements.txt</span>
+<span class="stat"><span class="add">+2</span> <span class="del">−1</span> <span style="color:var(--muted)">+17 B</span></span>
+</summary>
+<div class="diff"><table>
+<tr class="hunk"><td colspan="3">@@ -1 +1,2 @@</td></tr>
+<tr class="del"><td class="ln">1</td><td class="ln"></td><td class="code">boto3==1.34.0</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="code">boto3==1.35.20</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">2</td><td class="code">pydantic==2.9.0</td></tr>
+</table></div>
+</details>
+<details class="file" data-path="config.py " data-vendor="0">
+<summary>
+<span class="chip added">added</span>
+<span class="path">config.py</span>
+<span class="stat"><span class="add">+10</span> <span style="color:var(--muted)">+235 B</span></span>
+</summary>
+<div class="diff"><table>
+<tr class="hunk"><td colspan="3">@@ -0,0 +1,10 @@</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">1</td><td class="code">&quot;&quot;&quot;Runtime configuration.</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">2</td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="code">TODO: move these to Secrets Manager before this goes anywhere near production.</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">4</td><td class="code">&quot;&quot;&quot;</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">5</td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">6</td><td class="code">AWS_ACCESS_KEY_ID = &quot;AKIA••••••••••••••••&quot;</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">7</td><td class="code">STRIPE_API_KEY = &quot;sk_l••••••••••••••••••••••••••••&quot;</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">8</td><td class="code">DEBUG = True</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">9</td><td class="code"></td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">10</td><td class="code">MAX_ITEMS = 50</td></tr>
+</table></div>
+</details>
+<details class="file" data-path="helpers/__init__.py " data-vendor="0">
+<summary>
+<span class="chip added">added</span>
+<span class="path">helpers/__init__.py</span>
+<span class="stat"></span>
+</summary>
+<div class="note">No line diff shown (file is empty). 0 B → 0 B.</div>
+</details>
+<details class="file" data-path="helpers/db.py db.py" data-vendor="0">
+<summary>
+<span class="chip renamed">renamed</span>
+<span class="path">db.py → helpers/db.py</span>
+<span class="stat"><span class="add">+1</span> <span style="color:var(--muted)">+33 B</span></span>
+</summary>
+<div class="diff"><table>
+<tr class="hunk"><td colspan="3">@@ -9,5 +9,6 @@</td></tr>
+<tr><td class="ln">9</td><td class="ln">9</td><td class="code">            &quot;id&quot;: order[&quot;id&quot;],</td></tr>
+<tr><td class="ln">10</td><td class="ln">10</td><td class="code">            &quot;items&quot;: order[&quot;items&quot;],</td></tr>
+<tr><td class="ln">11</td><td class="ln">11</td><td class="code">            &quot;total&quot;: Decimal(str(order[&quot;total&quot;])),</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">12</td><td class="code">            &quot;status&quot;: &quot;PENDING&quot;,</td></tr>
+<tr><td class="ln">12</td><td class="ln">13</td><td class="code">        }</td></tr>
+<tr><td class="ln">13</td><td class="ln">14</td><td class="code">    )</td></tr>
+</table></div>
+</details>
+<details class="file" data-path="site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/METADATA" data-vendor="1">
+<summary>
+<span class="chip renamed">renamed</span>
+<span class="path">site-packages/boto3-1.34.0.dist-info/METADATA → site-packages/boto3-1.35.20.dist-info/METADATA</span>
+<span class="stat"><span class="add">+1</span> <span class="del">−1</span> <span style="color:var(--muted)">+1 B</span></span>
+</summary>
+<div class="diff"><table>
+<tr class="hunk"><td colspan="3">@@ -1,4 +1,4 @@</td></tr>
+<tr><td class="ln">1</td><td class="ln">1</td><td class="code">Metadata-Version: 2.1</td></tr>
+<tr><td class="ln">2</td><td class="ln">2</td><td class="code">Name: boto3</td></tr>
+<tr class="del"><td class="ln">3</td><td class="ln"></td><td class="code">Version: 1.34.0</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="code">Version: 1.35.20</td></tr>
+<tr><td class="ln">4</td><td class="ln">4</td><td class="code">Summary: The AWS SDK for Python</td></tr>
+</table></div>
+</details>
+<details class="file" data-path="site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/METADATA" data-vendor="1">
+<summary>
+<span class="chip renamed">renamed</span>
+<span class="path">site-packages/botocore-1.34.0.dist-info/METADATA → site-packages/botocore-1.35.20.dist-info/METADATA</span>
+<span class="stat"><span class="add">+1</span> <span class="del">−1</span> <span style="color:var(--muted)">+1 B</span></span>
+</summary>
+<div class="diff"><table>
+<tr class="hunk"><td colspan="3">@@ -1,4 +1,4 @@</td></tr>
+<tr><td class="ln">1</td><td class="ln">1</td><td class="code">Metadata-Version: 2.1</td></tr>
+<tr><td class="ln">2</td><td class="ln">2</td><td class="code">Name: botocore</td></tr>
+<tr class="del"><td class="ln">3</td><td class="ln"></td><td class="code">Version: 1.34.0</td></tr>
+<tr class="add"><td class="ln"></td><td class="ln">3</td><td class="code">Version: 1.35.20</td></tr>
+<tr><td class="ln">4</td><td class="ln">4</td><td class="code">Summary: Low-level, data-driven core of boto 3</td></tr>
+</table></div>
+</details>
+
+  <footer>
+    Generated by lambda-watcher on 2026-09-04 05:59.
+    Content hashes ignore zip timestamps, so re-downloading unchanged code does not create a new version.
+  </footer>
+</div>
+<script>
+(function () {
+  var search = document.getElementById('filter');
+  var vendorToggle = document.getElementById('vendor');
+  var files = Array.prototype.slice.call(document.querySelectorAll('details.file'));
+
+  function apply() {
+    var term = (search.value || '').toLowerCase();
+    var showVendor = vendorToggle ? vendorToggle.checked : true;
+    var shown = 0;
+    files.forEach(function (el) {
+      var path = (el.getAttribute('data-path') || '').toLowerCase();
+      var isVendor = el.getAttribute('data-vendor') === '1';
+      var ok = (!term || path.indexOf(term) !== -1) && (showVendor || !isVendor);
+      el.classList.toggle('hidden', !ok);
+      if (ok) shown++;
+    });
+    var counter = document.getElementById('shown-count');
+    if (counter) counter.textContent = shown + ' of ' + files.length + ' files shown';
+  }
+
+  if (search) search.addEventListener('input', apply);
+  if (vendorToggle) vendorToggle.addEventListener('change', apply);
+
+  var expand = document.getElementById('expand-all');
+  var collapse = document.getElementById('collapse-all');
+  if (expand) expand.addEventListener('click', function () {
+    files.forEach(function (f) { if (!f.classList.contains('hidden')) f.open = true; });
+  });
+  if (collapse) collapse.addEventListener('click', function () {
+    files.forEach(function (f) { f.open = false; });
+  });
+  apply();
+})();
+</script>
+</body>
+</html>

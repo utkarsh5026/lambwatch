@@ -15,12 +15,15 @@ to how you work. You keep downloading zips; it does the rest.
 ```
 $ lambda-watcher watch
 lambda-watcher 0.1.0 — archiving into ~/.lambda-watcher
-watching /Users/you/Downloads. Press Ctrl-C to stop.
-
-               new  order-processor v0004  order-processor.zip — archived a new version
+watching ~/Downloads. Press Ctrl-C to stop.
+               new  order-processor v0001  order-processor.zip — archived a new version
+               new  order-processor v0002  order-processor (1).zip — archived a new version
                     review: lambda-watcher diff "order-processor" --html --open
-        unchanged  order-processor v0004  order-processor (1).zip — identical to version 4
+         unchanged  order-processor v0002  order-processor (2).zip — identical to version 2
 ```
+
+That third line is the one that matters: the same code, downloaded again, is
+recorded as `unchanged` rather than becoming a bogus version 3.
 
 ---
 
@@ -66,6 +69,62 @@ answering the questions you actually have, in order:
 | **Config impact, called out** | A new `os.environ["QUEUE_URL"]` is flagged as *"this must exist in the function's environment before you deploy"*. A new `boto3.client("sqs")` is flagged as *"the execution role may need new IAM permissions"*. These are the changes that break a deploy and never show up in a file diff. |
 | **Renames survive edits** | A file that moved *and* changed is shown as one rename with a diff, not an unrelated add plus delete. |
 | **Secrets are diffed too** | An AWS key or Stripe token that appears between v7 and v8 gets its own section. Values are stored redacted; the secret itself never enters the index. |
+
+Concretely — the two versions above, where a `diff -rq` reports 61 changed
+files and 56 of them are `site-packages/`:
+
+```
+$ lambda-watcher diff order-processor
+╭──────────────────────────────────────────────────────────────────────╮
+│ order-processor   v0001 → v0002                                      │
+│ 2 added  2 modified  3 renamed  52 vendored (hidden)  +24 / -5 lines │
+╰──────────────────────────────────────────────────────────────────────╯
+  size     8.1 KB → 8.9 KB (+782 B)
+
+Dependencies                                      
+   manager  package   from    to       origin     
++  pip      pydantic  —       2.9.0    installed  
+~  pip      boto3     1.34.0  1.35.20  installed  
+~  pip      botocore  1.34.0  1.35.20  installed  
+
+  Env vars added: QUEUE_URL
+  AWS services added: sqs
+  ↑ these need to exist in the function's environment configuration
+
+New findings
+    high aws-access-key-id  config.py:6  AKIA…LE (20 chars)
+    high stripe-key  config.py:7  sk_l…dc (32 chars)
+     low debug-flag  config.py:8  DEBUG = True
+
+Files                                                                               
+   path                                                                 +  −  size  
+~  lambda_function.py                                                   9  2  +322  
+~  requirements.txt                                                     2  1   +17  
++  config.py                                                           10     +235  
++  helpers/__init__.py                                                              
+→  db.py → helpers/db.py                                                1      +33  
+→  site-packages/boto3-1.34.0.dist-info/METADATA →                      1  1    +1  
+   site-packages/boto3-1.35.20.dist-info/METADATA                                   
+→  site-packages/botocore-1.34.0.dist-info/METADATA →                   1  1    +1  
+   site-packages/botocore-1.35.20.dist-info/METADATA
+```
+
+The 52 vendored files became three version numbers, `db.py` moving into a
+package is one rename rather than a delete plus an add, and the new environment
+variable, the new AWS service and the three secret findings are changes that a
+file diff cannot express at all.
+
+That capture is not illustrative — it is the output of
+[`docs/examples/build_demo.py`](docs/examples/build_demo.py), which builds the
+two zips and runs the real pipeline over them. Run it yourself:
+
+```bash
+.venv/bin/python docs/examples/build_demo.py
+```
+
+The same comparison as a shareable HTML page — `--html --open` on any diff, or
+`report` for the whole history — is published from this repository:
+**[see the generated report](https://utkarsh5026.github.io/lambwatch/examples/report/v0001-v0002.html)**.
 
 ## Install
 
@@ -141,11 +200,11 @@ back from the newest.
 └── functions/
     └── order-processor/
         ├── versions/
-        │   ├── 0001-38bf0324/
+        │   ├── 0001-bd9f77c8/
         │   │   ├── code/           # the extracted tree
         │   │   ├── manifest.json   # the full analysis
         │   │   └── package.zip     # the original download
-        │   └── 0002-1bb8de01/
+        │   └── 0002-73d375ad/
         └── git/                    # one commit per version, tagged v0001…
 ```
 

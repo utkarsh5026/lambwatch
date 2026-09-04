@@ -109,6 +109,22 @@ is the aggregate gate to point branch protection at.
   equals `v<pyproject version>`, re-runs the suite on the tagged commit, publishes to PyPI via trusted
   publishing (OIDC, no stored token, environment `pypi`), then cuts a GitHub release.
 
+## Documentation examples
+
+Every terminal block in [README.md](README.md) and on the Pages site
+([docs/index.html](docs/index.html)) is captured output, not prose. `docs/examples/build_demo.py`
+builds a demo `order-processor` Lambda, runs the real pipeline over it and prints one capture per
+command; [tests/test_docs.py](tests/test_docs.py) re-runs it and fails if any documented line is not
+one the tool printed. So **changing renderer output means regenerating the docs**, not hand-editing
+them: run the builder, copy the block back. Timestamps, git commit ids and the free space `doctor`
+reports are the only parts allowed to vary. The capture comparison is POSIX-only — Rich substitutes
+box characters on Windows consoles by design — while the structural checks run on every leg.
+
+The demo zips are written with a pinned build stamp so version directories are stable
+(`0001-bd9f77c8`, `0002-73d375ad`) and the docs can quote them. `--publish` refreshes
+`docs/examples/report/`, the live HTML report the site links to. Credential-shaped fixtures use the
+same runtime-assembly trick as `conftest.fake_secret()`.
+
 ## Tests
 
 [tests/conftest.py](tests/conftest.py) provides the fixture chain `cfg → db → ingestor`, plus `downloads`
