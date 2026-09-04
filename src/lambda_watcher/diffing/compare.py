@@ -111,6 +111,12 @@ class VersionDiff:
     a_meta: dict[str, Any] = field(default_factory=dict)
     b_meta: dict[str, Any] = field(default_factory=dict)
 
+    #: The two version directories the comparison read. Renderers that want to
+    #: colour a file need the file, not just the lines the diff quoted from it —
+    #: a docstring is only a docstring if you can see where it opened.
+    a_root: Path | None = None
+    b_root: Path | None = None
+
     files: list[FileChange] = field(default_factory=list)
     vendor_files_changed: int = 0
     unchanged_files: int = 0
@@ -375,7 +381,7 @@ def compare_versions(
     old = _index(FileRecord.from_row(r) for r in a_files)
     new = _index(FileRecord.from_row(r) for r in b_files)
 
-    result = VersionDiff(function_name, a_seq, b_seq, a_meta or {}, b_meta or {})
+    result = VersionDiff(function_name, a_seq, b_seq, a_meta or {}, b_meta or {}, a_root, b_root)
     result.diffs_computed = compute_diffs
 
     added_paths = [p for p in new if p not in old]

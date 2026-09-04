@@ -132,3 +132,14 @@ and a `make_zip(name, {member: content})` factory. `cfg` points the store at `tm
 git mirror and notifications for speed — [test_watcher.py](tests/test_watcher.py) re-enables git explicitly.
 Credential-shaped test fixtures are assembled at runtime by `conftest.fake_secret()` so real-looking tokens
 never appear as literals in the repo; keep new secret-scanner fixtures on that helper.
+
+The report's syntax highlighter is a table of regexes rather than a parser, so how good it is stays an
+empirical question. [tools/measure_highlighting.py](tools/measure_highlighting.py) answers it: point it at
+a tree of real source files and it lexes each one both with `diffing/highlight.py` and with Pygments, then
+prints per-language agreement on the comment/string/code distinction. Pygments is the oracle and is
+deliberately *not* a dependency — `pip install pygments` alongside the dev extras when you want to re-run
+it. It also prints what the old line-local path would have scored, so a change that trades accuracy for
+something else has to say so out loud. Last run: 97.1% of characters and 94.8% of lines agree with a real
+lexer, over 3.5M characters. What remains is mostly taste (Pygments colours INI values and fenced markdown
+blocks as strings; we colour the key and the fence instead) plus shell heredocs, which need a backreference
+the one-regex-per-family design has no room for.
