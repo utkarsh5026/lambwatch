@@ -10,6 +10,7 @@ they do, and name the command to regenerate from.
 from __future__ import annotations
 
 import html
+import os
 import re
 import subprocess
 import sys
@@ -23,12 +24,16 @@ README = REPO / "README.md"
 BUILDER = REPO / "docs" / "examples" / "build_demo.py"
 
 
-# Two things legitimately differ between runs: when a version was archived, and
-# the git mirror's commit ids (git hashes the commit time). Every other
-# character of a documented capture has to match what the tool printed.
+# Three things legitimately differ between runs: when a version was archived,
+# the git mirror's commit ids (git hashes the commit time), and the free disk
+# space `doctor` reports. Every other character of a documented capture has to
+# match what the tool printed.
 _VARIABLE = [
     (re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}"), "<archived>"),
     (re.compile(r"^[0-9a-f]{7,40}(?= order-processor v\d)"), "<commit>"),
+    # `doctor` reports the machine's free space, which is not a property of the
+    # tool at all: the page quotes whatever the run that produced it saw.
+    (re.compile(r"^(disk free)\s+\S+\s+.*$"), r"\1 <this machine>"),
 ]
 
 
@@ -42,8 +47,11 @@ def _comparable(line: str) -> str:
 @pytest.fixture(scope="module")
 def captures() -> set[str]:
     """Every line the demo builder prints, from one real run of the pipeline."""
+    # The captures are UTF-8 (box characters, arrows); Windows would otherwise
+    # decode this pipe as cp1252 and mangle every frame.
     proc = subprocess.run(
-        [sys.executable, str(BUILDER)], cwd=REPO, capture_output=True, text=True
+        [sys.executable, str(BUILDER)], cwd=REPO, capture_output=True, text=True,
+        encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return {_comparable(line) for line in proc.stdout.split("\n")}

@@ -263,6 +263,12 @@ class Runner:
             "COLUMNS": str(width),    # 84 is the width the documentation page renders at
             "TERM": "dumb",
             "NO_COLOR": "1",
+            # Rich draws the diff panel with box characters and renders `→` in
+            # renames. Windows defaults a pipe to cp1252, which cannot encode
+            # either: Rich silently downgrades the frame to ASCII and the arrow
+            # raises outright. Pin both ends to UTF-8 so the captures are the
+            # same text on every platform the suite runs on.
+            "PYTHONIOENCODING": "utf-8",
         }
 
     def write_config(self) -> None:
@@ -283,7 +289,7 @@ class Runner:
     def run(self, *args: str) -> str:
         proc = subprocess.run(
             [sys.executable, "-m", "lambda_watcher", *args],
-            cwd=REPO, env=self.env, capture_output=True, text=True,
+            cwd=REPO, env=self.env, capture_output=True, text=True, encoding="utf-8",
         )
         if proc.returncode != 0:
             sys.stderr.write(proc.stdout + proc.stderr)
@@ -298,13 +304,19 @@ class Runner:
         of a capture is just noise. Every path printed sits at the end of its
         line or in free text, so shortening one only ever removes trailing
         padding that ``rstrip`` was going to drop anyway.
+
+        Both spellings of each path are replaced, because the tool echoes the
+        config file's forward-slash form as well as the native one, and the
+        separators inside what is left are normalised so a capture taken on
+        Windows reads the same as one taken anywhere else.
         """
         for real, shown in ((self.downloads, "~/Downloads"),
                             (self.archive, "~/.lambda-watcher"),
                             (self.home, "~")):
-            text = re.sub(r"\n(?=" + re.escape(str(real)) + ")", "", text)
-            text = text.replace(str(real), shown)
-        return text
+            for spelling in {str(real), real.as_posix()}:
+                text = re.sub(r"\n(?=" + re.escape(spelling) + ")", "", text)
+                text = text.replace(spelling, shown)
+        return re.sub(r"~[\\/][^\s]*", lambda m: m.group(0).replace("\\", "/"), text)
 
 
 def recursive_diff(old: Path, new: Path) -> list[str]:
@@ -362,6 +374,12 @@ def tree_of(home: Path) -> str:
 
 
 def main() -> int:
+    # The captures contain box characters and arrows. Windows defaults stdout to
+    # cp1252, which cannot encode them, so printing would fail part-way through
+    # a run. The subprocesses are pinned to UTF-8 for the same reason.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keep", metavar="DIR", help="write the archive here instead of a temp dir")
     parser.add_argument("--publish", action="store_true",
