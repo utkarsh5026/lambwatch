@@ -31,6 +31,13 @@ top-level README is not a line the tool actually printed. That is what stops the
 documentation drifting back into plausible-looking fiction — the usual failure mode for
 example output that was written rather than captured.
 
+That comparison runs on POSIX only. Rich renders the same output differently on a Windows
+console: it substitutes the rounded corners the diff panel is drawn with (`╭` becomes `┌`,
+while `│` is left alone) and sizes some columns differently. There is no way to turn that
+off from the environment, and it is a property of the terminal rather than a defect in the
+documentation. The checks that do not depend on rendering — every command the page lists
+exists in the CLI, and every one of them is shown with its output — run everywhere.
+
 ## Why HOME is redirected
 
 The runner points `HOME` at the demo directory rather than rewriting paths afterwards, so

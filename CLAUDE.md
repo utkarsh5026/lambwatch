@@ -116,8 +116,9 @@ Every terminal block in [README.md](README.md) and on the Pages site
 builds a demo `order-processor` Lambda, runs the real pipeline over it and prints one capture per
 command; [tests/test_docs.py](tests/test_docs.py) re-runs it and fails if any documented line is not
 one the tool printed. So **changing renderer output means regenerating the docs**, not hand-editing
-them: run the builder, copy the block back. Timestamps and git commit ids are the only parts allowed
-to vary.
+them: run the builder, copy the block back. Timestamps, git commit ids and the free space `doctor`
+reports are the only parts allowed to vary. The capture comparison is POSIX-only — Rich substitutes
+box characters on Windows consoles by design — while the structural checks run on every leg.
 
 The demo zips are written with a pinned build stamp so version directories are stable
 (`0001-bd9f77c8`, `0002-73d375ad`) and the docs can quote them. `--publish` refreshes
