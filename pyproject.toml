@@ -35,7 +35,9 @@ lambda-watcher = "lambda_watcher.cli:main"
 lw = "lambda_watcher.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/utkarsh5026/Lambda-watcher-"
+Homepage = "https://github.com/utkarsh5026/lambwatch"
+Documentation = "https://utkarsh5026.github.io/lambwatch/"
+Issues = "https://github.com/utkarsh5026/lambwatch/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

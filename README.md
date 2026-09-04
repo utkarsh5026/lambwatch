@@ -10,6 +10,8 @@ practical way to answer **"what changed between the 2nd one and the 10th?"**.
 This tool turns that pile into a queryable, diffable history — with no change
 to how you work. You keep downloading zips; it does the rest.
 
+**[How it works, step by step →](https://utkarsh5026.github.io/lambwatch/)**
+
 ```
 $ lambda-watcher watch
 lambda-watcher 0.1.0 — archiving into ~/.lambda-watcher
@@ -70,8 +72,8 @@ answering the questions you actually have, in order:
 Python 3.10+.
 
 ```bash
-git clone https://github.com/utkarsh5026/Lambda-watcher-.git
-cd Lambda-watcher-
+git clone https://github.com/utkarsh5026/lambwatch.git
+cd lambwatch
 python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
