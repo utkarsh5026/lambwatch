@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -416,6 +417,15 @@ def main() -> int:
     v2 = write_zip(downloads / "order-processor (1).zip", V2_FILES)
     again = write_zip(downloads / "order-processor (2).zip", V2_FILES,
                       built=(2024, 3, 12, 14, 8, 0))   # same code, packaged again later
+
+    # Space the downloads out in time. The startup scan replays in mtime order,
+    # and on a filesystem with coarse timestamps three zips written in one burst
+    # share an mtime to the nanosecond - which left the order of the `watch`
+    # capture, and so the version numbers in it, up to directory iteration
+    # order. Hours apart, well inside the scan's 24-hour window.
+    for hours_ago, staged in ((3, v1), (2, v2), (1, again)):
+        stamp = time.time() - hours_ago * 3600
+        os.utime(staged, (stamp, stamp))
 
     # ---- intake ------------------------------------------------------------
     capture("init", "lambda-watcher init", wide.run("init"))
