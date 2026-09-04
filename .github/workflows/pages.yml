@@ -1,0 +1,45 @@
+name: Pages
+
+# Publishes docs/ to GitHub Pages. Required because the repository's Pages
+# source is set to "GitHub Actions" rather than "Deploy from a branch" —
+# with that setting nothing is served until a workflow uploads an artifact.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Pages needs to write a deployment and mint an OIDC token for it.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel an in-flight deployment: a half-published site is worse than
+# a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build and deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/configure-pages@v6
+
+      # docs/ is plain HTML with no build step, so it ships as-is.
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
