@@ -129,7 +129,11 @@ class Store:
         return target
 
     def discard_original(self, zip_path: Path) -> None:
-        """Used for duplicate downloads when ``on_ingest`` is ``move``."""
+        """Delete a download whose content is already archived, in ``move`` mode.
+
+        Whether this particular file may be removed at all is the caller's
+        decision, not this one's: see ``Ingestor.ingest``.
+        """
         if self.cfg.store.on_ingest != "move":
             return
         try:

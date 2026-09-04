@@ -36,6 +36,11 @@ watch:
   # Switch on if your Downloads folder is a network share, a VM mount or WSL,
   # where native filesystem events are unreliable.
   force_polling: false
+  # Windows reports a file as "modified" when an antivirus scan, the search
+  # indexer or OneDrive touches it. Anything whose contents were last written
+  # longer ago than this is not treated as a new arrival: the event is ignored,
+  # and `on_ingest: move` never deletes it. 0 turns the check off.
+  arrival_max_age_seconds: 300
   # Pick up zips that arrived while the watcher was not running.
   scan_on_start: true
   scan_on_start_max_age_hours: 24

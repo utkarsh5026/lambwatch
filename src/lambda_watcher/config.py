@@ -63,6 +63,13 @@ class WatchConfig:
     #: Use polling instead of native OS events (needed on network/WSL mounts).
     force_polling: bool = False
     polling_interval: float = 2.0
+    #: How recently a file must have been written to still count as an arrival.
+    #: Windows raises "modified" events for antivirus scans, search indexing and
+    #: cloud-sync attribute changes as well as for real writes, so those events
+    #: are ignored for anything older than this - and a file this old is never
+    #: deleted from the watched folder by ``store.on_ingest: move``.
+    #: 0 disables the check.
+    arrival_max_age_seconds: float = 300.0
     #: Ingest matching files already present when the watcher starts.
     scan_on_start: bool = True
     #: Ignore files older than this at startup scan (0 disables the cutoff).

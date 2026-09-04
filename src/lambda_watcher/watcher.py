@@ -29,8 +29,15 @@ from watchdog.observers.polling import PollingObserver
 
 from .config import Config
 from .db import Database
-from .ingest import IngestResult, Ingestor, wait_until_stable
+from .ingest import IngestResult, Ingestor, recently_written, wait_until_stable
 from .utils import LOG
+
+
+#: Queue reasons that mean "this file just landed here". The startup scan is
+#: deliberately absent: it sweeps files that were already sitting in the folder,
+#: and cannot tell an overnight download from a zip something merely touched, so
+#: what it finds is archived but never cleared out of the watched folder.
+ARRIVAL_REASONS = frozenset({"created", "moved", "modified", "manual"})
 
 
 @dataclass
@@ -42,14 +49,31 @@ class _Job:
 class _Handler(FileSystemEventHandler):
     """Translates watchdog events into ingest jobs."""
 
-    def __init__(self, enqueue: Callable[[Path, str], None], is_candidate: Callable[[Path], bool]) -> None:
+    def __init__(
+        self,
+        enqueue: Callable[[Path, str], None],
+        is_candidate: Callable[[Path], bool],
+        arrival_max_age: float = 0.0,
+    ) -> None:
         self.enqueue = enqueue
         self.is_candidate = is_candidate
+        self.arrival_max_age = arrival_max_age
 
-    def _maybe(self, raw_path: str | bytes, reason: str) -> None:
+    def _maybe(self, raw_path: str | bytes, reason: str, *, require_recent: bool = False) -> None:
         path = Path(raw_path.decode() if isinstance(raw_path, bytes) else raw_path)
-        if self.is_candidate(path):
-            self.enqueue(path, reason)
+        if not self.is_candidate(path):
+            return
+        if require_recent and not self._recently_written(path):
+            LOG.debug("ignoring %s event for %s: nothing was written to it", reason, path.name)
+            return
+        self.enqueue(path, reason)
+
+    def _recently_written(self, path: Path) -> bool:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return False
+        return recently_written(mtime, self.arrival_max_age)
 
     def on_created(self, event: FileSystemEvent) -> None:
         if isinstance(event, FileCreatedEvent):
@@ -61,10 +85,13 @@ class _Handler(FileSystemEventHandler):
             self._maybe(event.dest_path, "moved")
 
     def on_modified(self, event: FileSystemEvent) -> None:
-        # Some browsers write in place without a rename; the stability wait and
-        # the content hash make the extra events harmless.
+        # Some browsers write in place without a rename, so these events matter.
+        # But Windows also raises them when nothing was written: watchdog asks
+        # ReadDirectoryChangesW for attribute, security and last-access changes
+        # too, so an antivirus sweep, the search indexer or OneDrive dehydrating
+        # a folder re-announces every zip in it at once. mtime is the filter.
         if isinstance(event, FileModifiedEvent):
-            self._maybe(event.src_path, "modified")
+            self._maybe(event.src_path, "modified", require_recent=True)
 
 
 class Watcher:
@@ -122,7 +149,7 @@ class Watcher:
             return
         if not job.path.exists():  # moved or deleted while we waited
             return
-        result = self.ingestor.ingest(job.path)
+        result = self.ingestor.ingest(job.path, just_downloaded=job.reason in ARRIVAL_REASONS)
         if self.on_result:
             try:
                 self.on_result(result)
@@ -177,7 +204,9 @@ class Watcher:
         observer_cls = PollingObserver if self.cfg.watch.force_polling else Observer
         kwargs = {"timeout": self.cfg.watch.polling_interval} if self.cfg.watch.force_polling else {}
         self._observer = observer_cls(**kwargs)  # type: ignore[operator]
-        handler = _Handler(self.enqueue, self.ingestor.is_candidate)
+        handler = _Handler(
+            self.enqueue, self.ingestor.is_candidate, self.cfg.watch.arrival_max_age_seconds
+        )
         for directory in existing:
             self._observer.schedule(handler, str(directory), recursive=self.cfg.watch.recursive)
             LOG.info("watching %s", directory)

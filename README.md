@@ -235,9 +235,10 @@ Everything is optional. The settings worth knowing:
 
 ```yaml
 watch:
-  dirs: ["~/Downloads"]      # add more if you download from several places
-  stable_seconds: 2.0        # how long a file must stop changing before it is read
-  force_polling: false       # turn on for network shares, VM mounts, WSL
+  dirs: ["~/Downloads"]          # add more if you download from several places
+  stable_seconds: 2.0            # how long a file must stop changing before it is read
+  force_polling: false           # turn on for network shares, VM mounts, WSL
+  arrival_max_age_seconds: 300   # ignore "modified" events for files older than this
 
 store:
   on_ingest: copy            # copy | move | leave
@@ -285,6 +286,14 @@ that fragment maps straight to the right function.
   skips placeholders. Treat a finding as a prompt to look, not a verdict.
 - **Layers are separate functions in AWS**, and they are downloaded separately;
   they will be archived as their own entries.
+- **A filesystem event is not proof that a file was written.** Windows reports
+  a zip as modified when an antivirus scan, the search indexer or OneDrive so
+  much as touches it — watchdog asks the OS for attribute and last-access
+  changes too — so a background sweep re-announces every zip in the folder at
+  once. Events claiming a write to a file nothing has written to are ignored
+  (`watch.arrival_max_age_seconds`), and `store.on_ingest: move` only clears
+  out a download the watcher saw arrive: a zip that a startup scan or a
+  `backfill` merely found is archived where it lies, never deleted.
 - Large vendored packages make for large archives. `store.on_ingest: leave`
   and `store.keep_zip: false` trade the original zips for disk space, and
   `store.max_versions_per_function` caps history.

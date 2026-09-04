@@ -1,13 +1,15 @@
+import os
 import subprocess
 import time
 import zipfile
 from pathlib import Path
 
 import pytest
+from watchdog.events import FileCreatedEvent, FileModifiedEvent
 
 from lambda_watcher.gitmirror import git_available
 from lambda_watcher.ingest import Ingestor, wait_until_stable
-from lambda_watcher.watcher import Watcher
+from lambda_watcher.watcher import Watcher, _Handler
 from tests.conftest import PY_V1, PY_V2
 
 
@@ -91,6 +93,68 @@ def test_startup_scan_replays_in_chronological_order(cfg, db, downloads: Path):
 
     # Oldest file first, so version numbers follow real history.
     assert [r.source.name for r in results] == ["fn-a.zip", "fn-b.zip"]
+
+
+def test_a_modified_event_for_an_untouched_file_is_ignored(cfg, db, downloads: Path):
+    """Windows raises "modified" when nothing was written.
+
+    watchdog subscribes to attribute, security and last-access changes as well
+    as writes, so an antivirus sweep, the search indexer or OneDrive
+    dehydrating a folder re-announces every zip sitting in it. Those files have
+    not changed, and re-reading them is how old downloads got dragged back
+    through the pipeline.
+    """
+    queued: list[tuple[Path, str]] = []
+    handler = _Handler(
+        lambda path, reason: queued.append((path, reason)),
+        Ingestor(cfg, db).is_candidate,
+        cfg.watch.arrival_max_age_seconds,
+    )
+
+    downloading = _write_zip(downloads / "fresh.zip", {"lambda_function.py": PY_V1})
+    settled = _write_zip(downloads / "last-month.zip", {"lambda_function.py": PY_V2})
+    long_ago = time.time() - 30 * 86400
+    os.utime(settled, (long_ago, long_ago))
+
+    handler.on_modified(FileModifiedEvent(str(downloading)))
+    handler.on_modified(FileModifiedEvent(str(settled)))
+    assert [path.name for path, _ in queued] == ["fresh.zip"]
+
+    # Age only disqualifies an event that claims a write. A zip *arriving* in
+    # the folder keeps whatever mtime it was copied with, and is still ours.
+    handler.on_created(FileCreatedEvent(str(settled)))
+    assert [path.name for path, _ in queued] == ["fresh.zip", "last-month.zip"]
+
+
+def test_startup_scan_finds_files_it_may_not_delete(cfg, db, downloads: Path):
+    cfg.watch.force_polling = True
+    cfg.watch.stable_seconds = 0.1
+    cfg.store.on_ingest = "move"
+
+    source = _write_zip(downloads / "fn.zip", {"lambda_function.py": PY_V1})
+    results = []
+    watcher = Watcher(cfg, db, Ingestor(cfg, db), on_result=results.append)
+    watcher.start()
+    try:
+        assert _wait_for(lambda: results)
+    finally:
+        watcher.stop()
+
+    # Archived, as a scan should: the zip moved into the version directory.
+    assert results[0].status == "new"
+    assert not source.exists()
+
+    # But content the archive already holds is only ever left where it was: a
+    # scan has no way of knowing whether this zip just arrived.
+    again = _write_zip(downloads / "fn.zip", {"lambda_function.py": PY_V1})
+    watcher = Watcher(cfg, db, Ingestor(cfg, db), on_result=results.append)
+    watcher.start()
+    try:
+        assert _wait_for(lambda: len(results) == 2)
+    finally:
+        watcher.stop()
+    assert results[1].status in {"duplicate-download", "unchanged"}
+    assert again.exists()
 
 
 def test_wait_until_stable_waits_for_a_growing_file(tmp_path: Path):

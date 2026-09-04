@@ -379,7 +379,8 @@ def backfill(
     ingestor = Ingestor(cfg, db)
     stats: dict[str, int] = {}
     for path in files:
-        result = ingestor.ingest(path)
+        # Someone else's backup folder: archive from it, never delete out of it.
+        result = ingestor.ingest(path, just_downloaded=False)
         stats[result.status] = stats.get(result.status, 0) + 1
         suffix = f" v{result.seq:04d}" if result.seq else ""
         console.print(f"  {result.status:>18}  {result.function_name or '?'}{suffix}  [dim]{path.name}[/dim]")
