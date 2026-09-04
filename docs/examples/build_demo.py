@@ -393,16 +393,21 @@ def main() -> int:
             shutil.rmtree(base)
     else:
         tmp = tempfile.mkdtemp(prefix="lw-demo-")
-        base = Path(tmp)
+        # Resolved because macOS hands out temp directories under /var, which is
+        # a symlink to /private/var. The tool reports the resolved path, so an
+        # unresolved HOME here would leave every path in the captures unshortened.
+        base = Path(tmp).resolve()
 
     home, downloads = base / "home", base / "home" / "Downloads"
     downloads.mkdir(parents=True, exist_ok=True)
     cli = Runner(home, downloads)
-    # Commands that print an archive path get a wider terminal. The demo's real
-    # path is a temp directory, long enough that Rich would fold it mid-string,
-    # and shortening it for display afterwards cannot put such a line back
-    # together.
-    wide = Runner(home, downloads, width=110)
+    # Commands that print an archive path get a very wide terminal. The demo's
+    # real path is a temp directory — on macOS something like
+    # /var/folders/9z/.../T/lw-demo-xxxx — long enough that Rich would fold or
+    # truncate it, and shortening it for display afterwards cannot put such a
+    # line back together. Everything that varies with width here sits at the end
+    # of its line, so the captured text is the same at any generous width.
+    wide = Runner(home, downloads, width=240)
     archive = cli.archive
 
     # The four downloads, in the order they would land in ~/Downloads. The last
@@ -423,7 +428,7 @@ def main() -> int:
     (watch_home / "Downloads").mkdir(parents=True)
     for zipped in sorted(downloads.iterdir()):
         shutil.copy2(zipped, watch_home / "Downloads" / zipped.name)
-    watcher = Runner(watch_home, watch_home / "Downloads", width=96)
+    watcher = Runner(watch_home, watch_home / "Downloads", width=240)
     watcher.run("init")
     watcher.write_config()
     capture("watch", "lambda-watcher watch", watcher.run("watch", "--once"))
