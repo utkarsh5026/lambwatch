@@ -167,6 +167,34 @@ class VersionDiff:
             return "no file changes"
         return ", ".join(parts)
 
+    def impact_line(self) -> str:
+        """What the file counts cannot say: lines moved, and what a deploy now needs.
+
+        ``headline`` answers "how much changed"; this answers "what does that
+        mean for me". Empty when there is nothing of the sort to report, so
+        callers can leave the line out rather than print a blank one.
+        """
+        parts: list[str] = []
+        if self.diffs_computed and (self.total_added_lines or self.total_removed_lines):
+            parts.append(f"+{self.total_added_lines}/-{self.total_removed_lines} lines")
+        arrivals = [
+            f"{count} {noun}{'s' if count != 1 else ''}"
+            for count, noun in (
+                (len(self.env_added), "env var"),
+                (len(self.services_added), "AWS service"),
+                (len(self.findings_new), "secret"),
+            )
+            if count
+        ]
+        if arrivals:
+            parts.append("new: " + ", ".join(arrivals))
+        return " · ".join(parts)
+
+    def summary_line(self) -> str:
+        """Both halves at once, for somewhere with room for one line and no more."""
+        impact = self.impact_line()
+        return f"{self.headline()} · {impact}" if impact else self.headline()
+
     def as_dict(self) -> dict:
         return {
             "function": self.function_name,

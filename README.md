@@ -17,8 +17,9 @@ $ lambda-watcher watch
 lambda-watcher 0.1.0 — archiving into ~/.lambda-watcher
 watching ~/Downloads. Press Ctrl-C to stop.
                new  order-processor v0001  order-processor.zip — archived a new version
-               new  order-processor v0002  order-processor (1).zip — archived a new version
-                    review: lambda-watcher diff "order-processor" --html --open
+               new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 3 renamed, 52 vendored
+                    +24/-5 lines · new: 1 env var, 1 AWS service, 3 secrets
+                    report: ~/.lambda-watcher/reports/order-processor/v0001-v0002.html
          unchanged  order-processor v0002  order-processor (2).zip — identical to version 2
 ```
 
@@ -49,12 +50,12 @@ Every time a `.zip` lands in your Downloads folder, lambda-watcher:
 Then you review:
 
 ```bash
-lambda-watcher diff order-processor                    # last two versions, in the terminal
-lambda-watcher diff order-processor --from 2 --to 10   # any two versions
-lambda-watcher diff order-processor --html --open      # a shareable HTML report
-lambda-watcher report order-processor                  # the whole history, browsable
-lambda-watcher open order-processor                    # the whole archive, in your editor
-lambda-watcher git order-processor log -p              # or just use git
+lw diff order-processor                    # last two versions, in the terminal
+lw diff order-processor --from 2 --to 10   # any two versions
+lw diff order-processor --html --open      # a shareable HTML report
+lw report order-processor                  # the whole history, browsable
+lw open order-processor                    # the whole archive, in your editor
+lw git order-processor log -p              # or just use git
 ```
 
 ## Why the diffs are actually readable
@@ -130,41 +131,83 @@ The same comparison as a shareable HTML page — `--html --open` on any diff, or
 Python 3.10+.
 
 ```bash
+uv tool install lambda-watcher      # or: pipx install lambda-watcher
+```
+
+Either one puts `lambda-watcher` — and the shorter alias `lw`, used throughout
+this README — on your `PATH` in its own environment. Plain `pip install
+lambda-watcher` works too if you would rather manage the environment yourself.
+
+<details>
+<summary>From a checkout instead</summary>
+
+```bash
 git clone https://github.com/utkarsh5026/lambwatch.git
 cd lambwatch
 python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-That gives you `lambda-watcher` (and the shorter alias `lw`). To use it from
-anywhere, either add `.venv/bin` to your `PATH` or install with
-[pipx](https://pipx.pypa.io/): `pipx install -e .`
+</details>
 
 ## Quick start
 
 ```bash
-lambda-watcher init      # write ~/.lambda-watcher/config.yaml (optional)
-lambda-watcher doctor    # confirm the watch folder and store look right
-lambda-watcher watch     # leave it running; download zips as you normally do
+lw setup
+```
+
+That is the whole thing. `setup` writes a config you can edit, finds your
+downloads folder, offers to import any zips already sitting in it, and starts
+the watcher in the background — as a launchd agent on macOS, a systemd user
+service on Linux, a scheduled task on Windows — so it comes back after a
+reboot without you thinking about it.
+
+Then just keep downloading zips. When you want to know what happened:
+
+```bash
+lw                      # is it running, and what has it caught?
+lw diff order-processor # what changed in the last version
+```
+
+Every new version also writes its own comparison to
+`~/.lambda-watcher/reports/<function>/latest.html` as it is archived, so the
+answer is a bookmark rather than a command.
+
+<details>
+<summary>Running it by hand, or setting it up piece by piece</summary>
+
+```bash
+lw watch      # run in the foreground instead; Ctrl-C stops it
+lw start      # install and start the background watcher
+lw stop       # stop it (--remove also unregisters it)
+lw restart    # after editing the config
+lw doctor     # check the config, watch folders, store, git and disk space
 ```
 
 Already have a folder of old backups? Import them oldest-first so the version
 numbers match real history:
 
 ```bash
-lambda-watcher backfill ~/Downloads/lambda-backups --dry-run   # check the names first
-lambda-watcher backfill ~/Downloads/lambda-backups
+lw backfill ~/Downloads/lambda-backups --dry-run   # check the names first
+lw backfill ~/Downloads/lambda-backups
 ```
 
-To keep it running in the background permanently, see
-[docs/autostart.md](docs/autostart.md) (launchd, systemd and Task Scheduler
-recipes).
+If your platform's service manager is unavailable — WSL without a systemd user
+session, say — `lw start` falls back to a plain background process and tells
+you it will not survive a reboot. [docs/autostart.md](docs/autostart.md) has
+the manual recipes.
+
+</details>
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `watch` | Watch the download folders and archive everything that lands. `--once` processes what is already there and exits. |
+| `setup` | Config, background watcher and any history already on disk, in one go. `--no-service` skips the background watcher, `--yes` takes every default. |
+| `status` | Is it running, and what has it archived? Also what bare `lw` prints. |
+| `start` / `stop` | Register the background watcher with the OS, or stop it. `stop --remove` unregisters it too. |
+| `restart` | Stop and start it — use after editing the config. |
+| `watch` | Watch the download folders in the foreground. `--once` processes what is already there and exits. |
 | `ingest FILE...` | Archive specific zips by hand. `--as NAME` overrides the detected function, `--label` annotates the version. |
 | `backfill DIR` | Import a folder of old downloads, oldest first. `--dry-run` shows the names it would assign. |
 | `ls` | Every function archived so far. |
@@ -180,7 +223,7 @@ recipes).
 | `label FN V TEXT` | Annotate a version, e.g. `label order-processor 7 "prod deploy 2026-03-01"`. |
 | `search TERM` | Search filenames and dependencies across everything archived. |
 | `log` | Recent activity, including downloads that were skipped and why. |
-| `path FN [V]` | Print a path, for `cd "$(lambda-watcher path order-processor 7)"`. |
+| `path FN [V]` | Print a path, for `cd "$(lw path order-processor 7)"`. |
 | `rm FN` | Delete a function and everything archived for it. |
 | `reindex` | Rebuild the SQLite index from the manifests on disk. |
 | `doctor` | Check the config, watch folders, store, git and disk space. |
@@ -210,7 +253,7 @@ back from the newest.
 ```
 
 The directories are the source of truth. `index.db` is a cache you can delete
-and rebuild with `lambda-watcher reindex`, and the whole store is portable —
+and rebuild with `lw reindex`, and the whole store is portable —
 copy it to another machine and reindex.
 
 ### The git mirror
@@ -222,9 +265,9 @@ editor shows as the workspace root, so an open window says `order-processor`
 rather than something generic. Every tool you already know works on it:
 
 ```bash
-lambda-watcher open order-processor  # VS Code, on the whole repo
+lw open order-processor  # VS Code, on the whole repo
 
-cd "$(lambda-watcher path order-processor --repo)"
+cd "$(lw path order-processor --repo)"
 git diff v0002 v0010                 # the diff you originally wanted
 git log --oneline --stat
 ```
@@ -234,7 +277,7 @@ git log --oneline --stat
 name a different one. What you get is a folder of real files, not a diff: the
 sidebar reads `order-processor`, and the editor's own file tree, search, Source
 Control panel and timeline all work, with every earlier version a tag away. Name
-a version — `lambda-watcher open order-processor 3` — to open that version's
+a version — `lw open order-processor 3` — to open that version's
 files on their own instead.
 
 One repo per function is the point: your 2nd and 10th version of *one* Lambda
@@ -242,7 +285,7 @@ sit next to each other, with no other function's history in the way.
 
 ## Configuration
 
-`lambda-watcher init` writes an annotated `~/.lambda-watcher/config.yaml`.
+`lw init` writes an annotated `~/.lambda-watcher/config.yaml`.
 Everything is optional. The settings worth knowing:
 
 ```yaml
@@ -275,12 +318,12 @@ keeping work and personal archives separate.
 
 ### When it guesses the wrong name
 
-The filename is a guess, and `lambda-watcher log` records which strategy was
+The filename is a guess, and `lw log` records which strategy was
 used and how confident it was. Two commands fix any mistake:
 
 ```bash
-lambda-watcher rename unknown-a1b2c3d4 order-processor --alias "a1b2c3d4"
-lambda-watcher merge order-processor-old order-processor
+lw rename unknown-a1b2c3d4 order-processor --alias "a1b2c3d4"
+lw merge order-processor-old order-processor
 ```
 
 `--alias` teaches it permanently: any future download whose filename contains

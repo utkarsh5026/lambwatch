@@ -15,19 +15,21 @@ from pathlib import Path
 from typing import NoReturn, Optional
 
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
 
 from . import __version__
 from .config import Config, default_config_path, load_config
 from .db import Database
-from .diffing import compare_versions
+from .diffing import code_dir, diff_from_index
 from .diffing.render_html import render_timeline, write_html
 from .diffing.render_text import render as render_diff
 from .gitmirror import git_available
 from .ingest import Ingestor
+from .service import ServiceError, ServiceStatus, current_status, get_manager
 from .store import Store
-from .utils import format_ts, human_size, rmtree, setup_logging, slugify
+from .utils import format_ts, human_size, relative_ts, rmtree, setup_logging, slugify
 
 # Commands open the index freely and the process normally exits straight
 # after, so nothing closed it. Windows disagrees: an open SQLite handle makes
@@ -43,8 +45,12 @@ def _close_open_dbs(*_args: object, **_kwargs: object) -> None:
 
 
 app = typer.Typer(
-    add_completion=False,
-    no_args_is_help=True,
+    add_completion=True,
+    # Bare `lambda-watcher` answers "is it on, and what has it seen?" rather
+    # than printing a wall of twenty commands. Someone who has just installed
+    # the tool learns more from their own status than from the command list,
+    # and `--help` is still one flag away.
+    no_args_is_help=False,
     help="Watch your Downloads folder for Lambda deployment zips, archive every "
     "version, and diff any two of them.",
     result_callback=_close_open_dbs,
@@ -57,7 +63,17 @@ _CONFIG_PATH: Path | None = None
 
 # ---------------------------------------------------------------- helpers
 def _cfg() -> Config:
-    cfg = load_config(_CONFIG_PATH)
+    """Load the config, or explain why it could not be loaded.
+
+    Bare `lw` reads the config now, so a stray tab in the YAML would otherwise
+    greet the reader with a traceback on the command they type most. The file is
+    hand-edited and the fix is always in it, so name it.
+    """
+    try:
+        cfg = load_config(_CONFIG_PATH)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        path = _CONFIG_PATH or default_config_path()
+        _fail(f"could not read {path}:\n  {exc}\n  Fix it, or delete it to fall back to defaults.")
     cfg.ensure_dirs()
     setup_logging(cfg.log_level, cfg.log_dir / "watcher.log")
     return cfg
@@ -72,6 +88,26 @@ def _open_db(cfg: Config) -> Database:
 def _fail(message: str, code: int = 1) -> NoReturn:
     err_console.print(f"[red]error:[/red] {message}")
     raise typer.Exit(code)
+
+
+def _complete_function(incomplete: str) -> list[str]:
+    """Tab-completion for a function argument.
+
+    Runs inside the user's shell on every TAB, so it opens its own short-lived
+    connection, touches nothing, and swallows everything: a completion that
+    raises prints a traceback into the middle of the command line being typed.
+    """
+    try:
+        cfg = load_config(_CONFIG_PATH)
+        if not cfg.db_path.exists():
+            return []
+        with Database(cfg.db_path) as db:
+            return [
+                row["name"] for row in db.list_functions()
+                if row["name"].lower().startswith(incomplete.lower())
+            ]
+    except Exception:                                 # noqa: BLE001 - never break a prompt
+        return []
 
 
 def _resolve_function(db: Database, ident: str):
@@ -126,25 +162,15 @@ def _build_diff(db: Database, store: Store, cfg: Config, function_row, a_seq: in
                 include_vendor: bool | None, compute_diffs: bool = True):
     a = _version_or_fail(db, function_row["id"], a_seq)
     b = _version_or_fail(db, function_row["id"], b_seq)
-    a_dir = store.resolve_version_dir(a["dir"]) / "code"
-    b_dir = store.resolve_version_dir(b["dir"]) / "code"
-    for path, seq in ((a_dir, a_seq), (b_dir, b_seq)):
+    for row, seq in ((a, a_seq), (b, b_seq)):
+        path = code_dir(store, row)
         if not path.exists():
             err_console.print(
                 f"[yellow]warning:[/yellow] code for v{seq:04d} is missing at {path}; "
                 "line diffs for it will be empty"
             )
-    return compare_versions(
-        function_row["name"], a_seq, b_seq,
-        db.files_for(a["id"]), db.files_for(b["id"]), a_dir, b_dir, cfg.diff,
-        a_deps=db.deps_for(a["id"]), b_deps=db.deps_for(b["id"]),
-        a_env=db.env_for(a["id"]), b_env=db.env_for(b["id"]),
-        a_services=db.services_for(a["id"]), b_services=db.services_for(b["id"]),
-        a_findings=db.findings_for(a["id"]), b_findings=db.findings_for(b["id"]),
-        a_meta=dict(a), b_meta=dict(b),
-        include_vendor=include_vendor,
-        compute_diffs=compute_diffs,
-    )
+    return diff_from_index(db, store, cfg.diff, function_row["name"], a, b,
+                           include_vendor=include_vendor, compute_diffs=compute_diffs)
 
 
 def _open_path(path: Path) -> None:
@@ -195,7 +221,7 @@ def _resolve_editor(cfg: Config, override: str | None) -> list[str]:
             return [found]
     _fail(
         "no editor found on PATH (looked for " + ", ".join(_EDITORS) + "). "
-        "Pass --editor CMD, set `editor:` in the config, or use `lambda-watcher path` "
+        "Pass --editor CMD, set `editor:` in the config, or use `lw path` "
         "and open the folder yourself."
     )
     return []  # unreachable; _fail exits
@@ -223,8 +249,9 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _main(
+    ctx: typer.Context,
     config: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config.yaml (default: ~/.lambda-watcher/config.yaml)."
     ),
@@ -235,30 +262,258 @@ def _main(
 ) -> None:
     global _CONFIG_PATH
     _CONFIG_PATH = config
+    if ctx.invoked_subcommand is None:
+        _print_status()
 
 
-# ------------------------------------------------------------------ setup
-@app.command()
-def init(
-    force: bool = typer.Option(False, "--force", help="Overwrite an existing config file."),
+# --------------------------------------------------------------- dashboard
+def _home_relative(path: Path) -> str:
+    """``~/Downloads`` rather than ``/Users/someone/Downloads``, where it applies."""
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
+def _print_status() -> None:
+    """What bare `lw` prints: is it on, what has it seen, what to do next.
+
+    This is the first thing most people will ever see from the tool, so it
+    answers the two questions a newcomer actually has — *is it running* and
+    *did it catch anything* — and then names the one or two commands worth
+    typing next. Nothing here fails: an archive that does not exist yet is a
+    normal state to be in, not an error.
+    """
+    cfg = _cfg()
+    state = current_status(cfg, _CONFIG_PATH)
+    watched = ", ".join(_home_relative(d) for d in cfg.watch_dirs())
+
+    console.print(f"[bold]lambda-watcher[/bold] {__version__}")
+    if state.running:
+        console.print(f"\n  [green]●[/green] watching {watched}   [dim]{state.manager}[/dim]")
+    elif state.installed:
+        console.print(f"\n  [yellow]●[/yellow] installed but not running   [dim]{state.manager}[/dim]")
+    else:
+        console.print(f"\n  [dim]○[/dim] not watching   [dim]{watched} is not being archived[/dim]")
+
+    db = _open_db(cfg)
+    functions, versions_count, total_bytes = db.archive_totals()
+    if functions:
+        console.print(
+            f"    [dim]{functions} function{'s' if functions != 1 else ''} · "
+            f"{versions_count} version{'s' if versions_count != 1 else ''} · "
+            f"{human_size(total_bytes)} in {_home_relative(cfg.root)}[/dim]"
+        )
+    else:
+        console.print(f"    [dim]nothing archived yet · {_home_relative(cfg.root)}[/dim]")
+
+    rows = db.list_functions()[:5]
+    if rows:
+        table = Table(box=None, show_header=False, padding=(0, 2, 0, 2))
+        table.add_column("function")
+        table.add_column("latest", justify="right")
+        table.add_column("when", style="dim")
+        table.add_column("runtime", style="dim")
+        for row in rows:
+            latest = db.latest_version(int(row["id"]))
+            table.add_row(
+                row["name"],
+                f"v{int(row['latest_seq']):04d}" if row["latest_seq"] else "-",
+                relative_ts(row["last_seen"]),
+                (latest["runtime"] if latest else "") or "",
+            )
+        console.print()
+        console.print(table)
+
+    console.print()
+    for command, blurb in _next_steps(state, rows[0]["name"] if rows else None):
+        console.print(f"  [bold]{command}[/bold]   [dim]{blurb}[/dim]")
+
+
+def _next_steps(state: ServiceStatus, newest: str | None) -> list[tuple[str, str]]:
+    """The two or three commands most worth typing from where the user is now.
+
+    Not watching is always the first thing to fix — an archive that has stopped
+    growing is the failure this tool has to be loud about — but someone with
+    history already deserves to be told how to read it in the same breath.
+    """
+    steps: list[tuple[str, str]] = []
+    if not state.running:
+        steps.append(
+            ("lw start", "start watching again") if state.installed
+            else ("lw setup", "watch your downloads folder from now on")
+        )
+    if newest is None:
+        if state.running:
+            steps.append(("lw doctor", "check the watch folder is the right one"))
+        return steps
+    steps.append((f'lw diff "{newest}"', "what changed in the last version"))
+    if state.running:
+        steps.append((f'lw report "{newest}"', "the whole history, in your browser"))
+    return steps
+
+
+@app.command(rich_help_panel="Everyday")
+def status() -> None:
+    """Is the watcher running, and what has it archived? (Also plain `lw`.)"""
+    _print_status()
+
+
+# ----------------------------------------------------------- getting started
+@app.command(rich_help_panel="Everyday")
+def setup(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Take the default answer to every prompt."),
+    no_service: bool = typer.Option(
+        False, "--no-service", help="Set up the archive but do not run in the background."
+    ),
 ) -> None:
-    """Write a commented config file you can edit."""
-    from .templates import DEFAULT_CONFIG_YAML
+    """Set everything up: config, background watcher, and any history already on disk."""
+    config_path = _CONFIG_PATH or default_config_path()
+    console.print(f"[bold]lambda-watcher[/bold] {__version__} — setting up\n")
 
-    path = _CONFIG_PATH or default_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and not force:
-        _fail(f"{path} already exists (use --force to overwrite)")
-    path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
-    console.print(f"[green]wrote[/green] {path}")
-    cfg = load_config(path)
-    cfg.ensure_dirs()
-    console.print(f"archive root: {cfg.root}")
-    console.print(f"watching:     {', '.join(str(d) for d in cfg.watch_dirs())}")
-    console.print("\nNext: [bold]lambda-watcher watch[/bold]")
+    # The config is written before anything reads one, so that every step below
+    # — which folders to watch, above all — runs against the file the user will
+    # be editing rather than against defaults that happen to match it today.
+    if not config_path.exists():
+        from .templates import DEFAULT_CONFIG_YAML
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
+        console.print(f"  [green]✓[/green] wrote {_home_relative(config_path)}")
+    else:
+        console.print(f"  [green]✓[/green] using {_home_relative(config_path)}")
+
+    cfg = _cfg()
+    console.print(f"  [green]✓[/green] archive at {_home_relative(cfg.root)}")
+
+    missing = [d for d in cfg.watch_dirs() if not d.exists()]
+    for directory in cfg.watch_dirs():
+        mark = "[green]✓[/green]" if directory.exists() else "[red]✗[/red]"
+        console.print(f"  {mark} watching {_home_relative(directory)}")
+    if missing:
+        console.print(
+            f"\n[yellow]note:[/yellow] {len(missing)} watch folder(s) do not exist. "
+            f"Set [bold]watch.dirs[/bold] in {_home_relative(config_path)} and run setup again."
+        )
+
+    _offer_backfill(cfg, yes)
+
+    if no_service:
+        console.print("\n[dim]Skipping the background watcher. Run [bold]lw watch[/bold] "
+                      "when you want it, or [bold]lw start[/bold] to install it later.[/dim]")
+    else:
+        console.print()
+        _start_service(cfg)
+
+    console.print("\n[dim]That is the whole setup. Download a Lambda zip as you normally would; "
+                  "run [bold]lw[/bold] to see what it caught.[/dim]")
 
 
-@app.command()
+def _offer_backfill(cfg: Config, yes: bool) -> None:
+    """Archive zips already sitting in the watch folders, if the user wants them.
+
+    The watcher's own start-up scan only reaches back ``scan_on_start_max_age_hours``,
+    so anything older is invisible unless it is imported deliberately. Importing
+    it is not the obvious default — a Downloads folder is full of zips that have
+    nothing to do with Lambda — so this asks, and only assumes yes when told to.
+    """
+    candidates: list[Path] = []
+    ingestor = Ingestor(cfg, _open_db(cfg))
+    for directory in cfg.watch_dirs():
+        if not directory.exists():
+            continue
+        for extension in cfg.watch.extensions:
+            candidates += [
+                p for p in sorted(directory.glob(f"*{extension}")) if ingestor.is_candidate(p)
+            ]
+    if not candidates:
+        return
+
+    console.print(f"\n  found {len(candidates)} zip(s) already in your download folder(s)")
+    if not yes:
+        if not sys.stdin.isatty():
+            console.print("  [dim]run [bold]lw backfill <folder>[/bold] to archive them[/dim]")
+            return
+        if not typer.confirm("  archive them now as history?", default=False):
+            console.print("  [dim]skipped — [bold]lw backfill <folder>[/bold] does it later[/dim]")
+            return
+
+    candidates.sort(key=lambda p: p.stat().st_mtime)     # oldest first, so seq matches history
+    stats: dict[str, int] = {}
+    for path in candidates:
+        result = ingestor.ingest(path, just_downloaded=False)
+        stats[result.status] = stats.get(result.status, 0) + 1
+    console.print("  " + "  ".join(f"[bold]{k}[/bold]: {v}" for k, v in sorted(stats.items())))
+
+
+# ------------------------------------------------------------------ service
+def _start_service(cfg: Config) -> None:
+    """Install and start the background watcher, explaining whatever happens."""
+    manager = get_manager(cfg, _CONFIG_PATH)
+    try:
+        state = manager.install()
+    except ServiceError as exc:
+        _fail(
+            f"{exc}\n"
+            "  Run [bold]lw watch[/bold] in a terminal instead, or see docs/autostart.md "
+            "for the manual recipe."
+        )
+    if state.running:
+        console.print(f"  [green]●[/green] watching in the background   [dim]{state.manager}[/dim]")
+    else:
+        console.print(
+            f"  [yellow]●[/yellow] registered with {state.manager} but not running yet"
+            f"{' — ' + state.detail if state.detail else ''}"
+        )
+    if state.manager == "pidfile":
+        console.print(
+            "  [dim]no systemd user session here, so this will not come back after a reboot; "
+            "run [bold]lw start[/bold] again, or see docs/autostart.md[/dim]"
+        )
+
+
+@app.command(rich_help_panel="Watching")
+def start() -> None:
+    """Watch in the background, now and after every reboot."""
+    cfg = _cfg()
+    _start_service(cfg)
+
+
+@app.command(rich_help_panel="Watching")
+def stop(
+    remove: bool = typer.Option(
+        False, "--remove", help="Also unregister it, so it does not come back at login."
+    ),
+) -> None:
+    """Stop the background watcher."""
+    cfg = _cfg()
+    manager = get_manager(cfg, _CONFIG_PATH)
+    try:
+        if remove:
+            manager.uninstall()
+        else:
+            manager.stop()
+    except ServiceError as exc:
+        _fail(str(exc))
+    console.print(
+        "[dim]unregistered[/dim]" if remove else
+        "[dim]stopped (it will start again at login; --remove prevents that)[/dim]"
+    )
+
+
+@app.command(rich_help_panel="Watching")
+def restart() -> None:
+    """Stop and start the background watcher — use it after editing the config."""
+    cfg = _cfg()
+    manager = get_manager(cfg, _CONFIG_PATH)
+    try:
+        state = manager.restart()
+    except ServiceError as exc:
+        _fail(str(exc))
+    console.print(f"[dim]{state.summary} ({state.manager})[/dim]")
+
+
+# ----------------------------------------------------------------- checkup
+@app.command(rich_help_panel="Everyday")
 def doctor() -> None:
     """Check that everything the tool needs is in place."""
     cfg = _cfg()
@@ -306,7 +561,7 @@ def doctor() -> None:
 
 
 # ------------------------------------------------------------------ watch
-@app.command()
+@app.command(rich_help_panel="Watching")
 def watch(
     once: bool = typer.Option(False, "--once", help="Process what is already there, then exit."),
     dir: Optional[list[Path]] = typer.Option(
@@ -333,11 +588,17 @@ def watch(
             label += f" v{result.seq:04d}"
         console.print(
             f"[{colour}]{result.status:>18}[/{colour}]  {label}  "
-            f"[dim]{result.source.name} — {result.message}[/dim]"
+            f"[dim]{result.source.name} — {result.change_summary or result.message}[/dim]"
         )
-        if result.status == "new" and result.changed_from:
+        if result.change_impact:
+            console.print(f"[dim]{'':>18}  {result.change_impact}[/dim]")
+        # The comparison is rendered during ingest, so what is offered here is a
+        # file that already exists rather than a command to go and produce it.
+        if result.report_path is not None:
+            console.print(f"[dim]{'':>18}  report: {_home_relative(result.report_path)}[/dim]")
+        elif result.status == "new" and result.changed_from:
             console.print(
-                f"[dim]{'':>18}  review: lambda-watcher diff "
+                f"[dim]{'':>18}  review: lw diff "
                 f'"{result.function_name}" --html --open[/dim]'
             )
 
@@ -361,7 +622,7 @@ def watch(
     console.print("[dim]stopped[/dim]")
 
 
-@app.command()
+@app.command(rich_help_panel="Watching")
 def ingest(
     paths: list[Path] = typer.Argument(..., help="Zip file(s) to archive."),
     function: Optional[str] = typer.Option(
@@ -391,7 +652,7 @@ def ingest(
         raise typer.Exit(1)
 
 
-@app.command()
+@app.command(rich_help_panel="Watching")
 def backfill(
     directory: Path = typer.Argument(..., help="Folder full of previously downloaded zips."),
     pattern: str = typer.Option("*.zip", "--pattern", "-p", help="Glob to match."),
@@ -447,7 +708,7 @@ def backfill(
 
 
 # ------------------------------------------------------------- inspection
-@app.command("ls")
+@app.command("ls", rich_help_panel="Everyday")
 def list_functions() -> None:
     """List every Lambda function that has been archived."""
     cfg = _cfg()
@@ -456,7 +717,7 @@ def list_functions() -> None:
     if not rows:
         console.print(
             "[dim]Nothing archived yet. "
-            "Run [bold]lambda-watcher watch[/bold] and download a zip.[/dim]"
+            "Run [bold]lw start[/bold] and download a zip.[/dim]"
         )
         return
     table = Table(box=None, header_style="bold", padding=(0, 2, 0, 0))
@@ -477,9 +738,12 @@ def list_functions() -> None:
     console.print(table)
 
 
-@app.command()
+@app.command(rich_help_panel="Reading the archive")
 def versions(
-    function: str = typer.Argument(..., help="Function name (a unique substring works)."),
+    function: str = typer.Argument(
+        ..., help="Function name (a unique substring works).",
+        autocompletion=_complete_function,
+    ),
     limit: int = typer.Option(30, "--limit", "-n", help="How many to show."),
 ) -> None:
     """List the archived versions of one function."""
@@ -512,13 +776,13 @@ def versions(
         )
     console.print(table)
     console.print(
-        f"\n[dim]Compare the last two: [bold]lambda-watcher diff \"{row['name']}\"[/bold][/dim]"
+        f"\n[dim]Compare the last two: [bold]lw diff \"{row['name']}\"[/bold][/dim]"
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Reading the archive")
 def show(
-    function: str = typer.Argument(...),
+    function: str = typer.Argument(..., autocompletion=_complete_function),
     version: Optional[str] = typer.Argument(None, help="Version number, or 'latest' (default)."),
     files: bool = typer.Option(False, "--files", help="List every file in the package."),
     json_out: bool = typer.Option(False, "--json", help="Print the raw manifest."),
@@ -592,9 +856,9 @@ def show(
 
 
 # ------------------------------------------------------------------- diff
-@app.command()
+@app.command(rich_help_panel="Everyday")
 def diff(
-    function: str = typer.Argument(...),
+    function: str = typer.Argument(..., autocompletion=_complete_function),
     from_: Optional[str] = typer.Option(
         None, "--from", "-f", help="Older version (default: the one before --to)."
     ),
@@ -648,9 +912,9 @@ def diff(
     render_diff(console, result, show_diffs=not no_patch)
 
 
-@app.command()
+@app.command(rich_help_panel="Everyday")
 def report(
-    function: str = typer.Argument(...),
+    function: str = typer.Argument(..., autocompletion=_complete_function),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Directory for the report."),
     open_report: bool = typer.Option(False, "--open", help="Open the index in your browser."),
     limit: int = typer.Option(25, "--limit", "-n", help="How many recent versions to include."),
@@ -704,9 +968,11 @@ def report(
 
 
 # ---------------------------------------------------------------- editing
-@app.command()
+@app.command(rich_help_panel="Housekeeping")
 def rename(
-    current: str = typer.Argument(..., help="The function as it is recorded now."),
+    current: str = typer.Argument(
+        ..., help="The function as it is recorded now.", autocompletion=_complete_function
+    ),
     new_name: str = typer.Argument(..., help="What it should be called."),
     alias: Optional[str] = typer.Option(
         None, "--alias", help="Also remember this filename fragment as belonging to the function."
@@ -719,7 +985,7 @@ def rename(
     existing = db.get_function_by_name(new_name)
     if existing and int(existing["id"]) != int(row["id"]):
         _fail(
-            f"{new_name!r} already exists. Use `lambda-watcher merge {current!r} {new_name!r}` "
+            f"{new_name!r} already exists. Use `lw merge {current!r} {new_name!r}` "
             "to combine them."
         )
 
@@ -754,10 +1020,14 @@ def rename(
         console.print(f"[dim]future downloads containing {alias!r} will map here automatically[/dim]")
 
 
-@app.command()
+@app.command(rich_help_panel="Housekeeping")
 def merge(
-    source: str = typer.Argument(..., help="Function whose versions should move."),
-    target: str = typer.Argument(..., help="Function they should move into."),
+    source: str = typer.Argument(
+        ..., help="Function whose versions should move.", autocompletion=_complete_function
+    ),
+    target: str = typer.Argument(
+        ..., help="Function they should move into.", autocompletion=_complete_function
+    ),
 ) -> None:
     """Combine two entries that are really the same Lambda, renumbering by time."""
     cfg = _cfg()
@@ -820,12 +1090,12 @@ def merge(
         f"[green]merged[/green] {src['name']} into {dst['name']} "
         f"({len(everything)} versions, renumbered by archive time)"
     )
-    console.print("[dim]run `lambda-watcher reindex` if any diffs look wrong[/dim]")
+    console.print("[dim]run `lw reindex` if any diffs look wrong[/dim]")
 
 
-@app.command()
+@app.command(rich_help_panel="Housekeeping")
 def label(
-    function: str = typer.Argument(...),
+    function: str = typer.Argument(..., autocompletion=_complete_function),
     version: str = typer.Argument(..., help="Version number, or 'latest'."),
     text: str = typer.Argument(..., help="Note to attach, e.g. 'prod deploy 2026-03-01'."),
 ) -> None:
@@ -839,9 +1109,9 @@ def label(
     console.print(f"[green]labelled[/green] {row['name']} v{seq:04d}: {text}")
 
 
-@app.command("rm")
+@app.command("rm", rich_help_panel="Housekeeping")
 def remove(
-    function: str = typer.Argument(...),
+    function: str = typer.Argument(..., autocompletion=_complete_function),
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
 ) -> None:
     """Delete a function and everything archived for it."""
@@ -867,9 +1137,9 @@ def remove(
 
 
 # --------------------------------------------------------------- plumbing
-@app.command()
+@app.command(rich_help_panel="Reading the archive")
 def export(
-    function: str = typer.Argument(...),
+    function: str = typer.Argument(..., autocompletion=_complete_function),
     version: Optional[str] = typer.Argument(None, help="Version number, or 'latest' (default)."),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Destination path."),
     as_zip: bool = typer.Option(True, "--zip/--tree", help="Write a zip, or copy the folder."),
@@ -902,9 +1172,9 @@ def export(
         console.print(f"[green]copied[/green] {target}")
 
 
-@app.command("open")
+@app.command("open", rich_help_panel="Reading the archive")
 def open_in_editor(
-    function: str = typer.Argument(..., help="Function name, slug or id."),
+    function: str = typer.Argument(..., help="Function name, slug or id.", autocompletion=_complete_function),
     version: Optional[str] = typer.Argument(
         None, help="Open this version's files alone instead of the whole repo."
     ),
@@ -970,9 +1240,9 @@ def open_in_editor(
     console.print(f"[dim]{target}[/dim]")
 
 
-@app.command()
+@app.command(rich_help_panel="Housekeeping")
 def path(
-    function: str = typer.Argument(...),
+    function: str = typer.Argument(..., autocompletion=_complete_function),
     version: Optional[str] = typer.Argument(None),
     repo: bool = typer.Option(
         False, "--repo", "--git", help="Print the git mirror path instead."
@@ -1000,6 +1270,7 @@ def path(
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help="Run a git command inside a function's mirror repo, e.g. `lw git my-fn log --oneline`.",
+    rich_help_panel="Reading the archive",
 )
 def git(ctx: typer.Context, function: str = typer.Argument(...)) -> None:
     """Run git against the per-function mirror repository."""
@@ -1011,14 +1282,14 @@ def git(ctx: typer.Context, function: str = typer.Argument(...)) -> None:
     if not (repo / ".git").exists():
         _fail(
             f"no git mirror for {row['name']} at {repo}. "
-            "Enable git_mirror in the config and re-ingest, or use `lambda-watcher diff`."
+            "Enable git_mirror in the config and re-ingest, or use `lw diff`."
         )
     args = list(ctx.args) or ["log", "--oneline", "--decorate", "-20"]
     proc = subprocess.run(["git", "-C", str(repo), *args])
     raise typer.Exit(proc.returncode)
 
 
-@app.command()
+@app.command(rich_help_panel="Reading the archive")
 def search(
     term: str = typer.Argument(..., help="Filename fragment or package name."),
     kind: str = typer.Option("all", "--kind", "-k", help="all | files | deps"),
@@ -1054,7 +1325,7 @@ def search(
             console.print(table)
 
 
-@app.command("log")
+@app.command("log", rich_help_panel="Housekeeping")
 def show_log(limit: int = typer.Option(25, "--limit", "-n")) -> None:
     """Recent activity, including downloads that were skipped and why."""
     cfg = _cfg()
@@ -1084,7 +1355,27 @@ def show_log(limit: int = typer.Option(25, "--limit", "-n")) -> None:
     console.print(table)
 
 
-@app.command()
+@app.command(rich_help_panel="Housekeeping")
+def init(
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing config file."),
+) -> None:
+    """Write a commented config file you can edit."""
+    from .templates import DEFAULT_CONFIG_YAML
+
+    path = _CONFIG_PATH or default_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        _fail(f"{path} already exists (use --force to overwrite)")
+    path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
+    console.print(f"[green]wrote[/green] {path}")
+    cfg = load_config(path)
+    cfg.ensure_dirs()
+    console.print(f"archive root: {cfg.root}")
+    console.print(f"watching:     {', '.join(str(d) for d in cfg.watch_dirs())}")
+    console.print("\nNext: [bold]lw start[/bold]")
+
+
+@app.command(rich_help_panel="Housekeeping")
 def reindex(
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
 ) -> None:

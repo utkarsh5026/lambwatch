@@ -252,6 +252,39 @@ def format_ts(value: str | None) -> str:
     return dt.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def relative_ts(value: str | None) -> str:
+    """"20 minutes ago", "yesterday", "3 weeks ago" — a timestamp read at a glance.
+
+    The dashboard answers "did it catch my last deploy?", and a wall-clock stamp
+    makes the reader do the subtraction themselves. Past a couple of months the
+    exact day starts mattering more than the distance, so it falls back to the
+    date.
+    """
+    dt = parse_iso(value)
+    if dt is None:
+        return "-"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    seconds = int((datetime.now(timezone.utc) - dt).total_seconds())
+    if seconds < 60:
+        return "just now"                       # also covers a little clock skew
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = hours // 24
+    if days == 1:
+        return "yesterday"
+    if days < 14:
+        return f"{days} days ago"
+    if days < 60:
+        weeks = days // 7
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    return dt.astimezone().strftime("%Y-%m-%d")
+
+
 def rmtree(path: Path) -> None:
     """Delete a tree, tolerating read-only files (common inside zips)."""
     import shutil

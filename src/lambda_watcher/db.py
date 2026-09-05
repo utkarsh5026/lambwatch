@@ -280,6 +280,17 @@ class Database:
             """
         ).fetchall()
 
+    def archive_totals(self) -> tuple[int, int, int]:
+        """Functions, versions and indexed bytes — the three numbers `lw status` shows."""
+        row = self.conn.execute(
+            """
+            SELECT (SELECT COUNT(*) FROM functions)                    AS functions,
+                   (SELECT COUNT(*) FROM versions)                     AS versions,
+                   (SELECT COALESCE(SUM(total_size), 0) FROM versions) AS bytes
+            """
+        ).fetchone()
+        return int(row["functions"]), int(row["versions"]), int(row["bytes"])
+
     def rename_function(self, function_id: int, new_name: str, new_slug: str) -> None:
         self.conn.execute(
             "UPDATE functions SET name = ?, slug = ? WHERE id = ?", (new_name, new_slug, function_id)

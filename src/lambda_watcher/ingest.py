@@ -49,6 +49,12 @@ class IngestResult:
     identification: Identification | None = None
     message: str = ""
     changed_from: int | None = None
+    #: The comparison against the previous version, rendered as it was archived.
+    report_path: Path | None = None
+    #: How much changed, e.g. "2 added, 2 modified, 3 renamed, 52 vendored".
+    change_summary: str | None = None
+    #: What that means, e.g. "+24/-5 lines · new: 1 env var, 1 secret". May be empty.
+    change_impact: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -317,12 +323,18 @@ class Ingestor:
         self._mirror_to_git(slug, paths.code, seq, ident.name, now, tree_hash, zip_path.name)
         self._prune(slug, function_id)
 
+        report_path, change_summary, change_impact = self._render_report(
+            ident.name, slug, function_id, seq, previous
+        )
+
         if self.cfg.notify.enabled:
             previous_note = f" (was v{previous['seq']:04d})" if previous else ""
+            detail = f"{analysis.inventory.file_count} files · {human_size(analysis.inventory.total_size)}"
+            if self.cfg.notify.summarise_changes and change_summary:
+                detail = f"{change_summary} · {change_impact}" if change_impact else change_summary
             notify(
                 f"Lambda archived: {ident.name}",
-                f"v{seq:04d}{previous_note} · {analysis.inventory.file_count} files · "
-                f"{human_size(analysis.inventory.total_size)}",
+                f"v{seq:04d}{previous_note} · {detail}",
                 enabled=True,
             )
 
@@ -333,6 +345,7 @@ class Ingestor:
         )
         return IngestResult(
             "new", zip_path, ident.name, seq, paths.root, tree_hash, ident,
+            report_path=report_path, change_summary=change_summary, change_impact=change_impact,
             message="archived a new version",
             changed_from=int(previous["seq"]) if previous else None,
         )
@@ -393,6 +406,45 @@ class Ingestor:
                  for f in analysis.findings],
             )
         return version_id
+
+    def _render_report(
+        self, name: str, slug: str, function_id: int, seq: int, previous
+    ) -> tuple[Path | None, str | None, str | None]:
+        """Render the comparison against the previous version, as it is archived.
+
+        By the time a background watcher archives something, nobody is looking at
+        a terminal — so the answer to "what changed?" is written to disk now,
+        while the pipeline is already warm, rather than waiting for someone to
+        think of asking. ``latest.html`` is the same page under a name that never
+        goes stale, so it can be bookmarked.
+
+        Rendering is a convenience, never a reason to fail an ingest that has
+        already succeeded: every failure here is logged and swallowed.
+        """
+        if not self.cfg.report.auto_diff or previous is None:
+            return None, None, None
+        # Deferred: the renderer pulls in the whole presentation layer, and an
+        # ingest with nothing to compare against should not pay for the import.
+        from .diffing import diff_from_index
+        from .diffing.render_html import write_html
+
+        try:
+            current = self.db.get_version(function_id, seq)
+            if current is None:
+                return None, None, None
+            diff = diff_from_index(
+                self.db, self.store, self.cfg.diff, name, previous, current,
+                include_vendor=True if self.cfg.report.include_vendor else None,
+            )
+            target_dir = self.cfg.reports_dir / slug
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / f"v{int(previous['seq']):04d}-v{seq:04d}.html"
+            write_html(diff, target)
+            write_html(diff, target_dir / "latest.html")
+        except Exception as exc:                       # noqa: BLE001 - never fail an ingest
+            LOG.warning("could not render the report for %s v%04d: %s", name, seq, exc)
+            return None, None, None
+        return target, diff.headline(), diff.impact_line()
 
     def _mirror_to_git(
         self, slug: str, code_dir: Path, seq: int, name: str, now: str, tree_hash: str, source: str

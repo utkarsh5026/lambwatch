@@ -102,6 +102,19 @@ git_mirror:
 
 notify:
   enabled: true
+  # Only say something when the code actually differs from the last version.
+  only_on_change: true
+  # Put what changed in the notification - "2 modified, +24/-5 lines, 1 new env
+  # var" - rather than just the file count and size.
+  summarise_changes: true
+
+report:
+  # Render the comparison against the previous version as each one is archived,
+  # so the answer to "what changed?" is already written by the time the
+  # notification about it appears. Each lands in reports/<function>/, alongside
+  # a latest.html that always points at the newest comparison.
+  auto_diff: true
+  include_vendor: false
 
 # What `lw open` launches on a folder. Left empty, it looks for VS Code and
 # friends on PATH. $LAMBDA_WATCHER_EDITOR overrides this.
