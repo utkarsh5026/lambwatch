@@ -22,7 +22,7 @@ from ..utils import LOG, read_text
 from .inventory import Inventory
 
 try:  # Python 3.11+
-    import tomllib
+    import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover
     try:
         import tomli as tomllib  # type: ignore[no-redef]
