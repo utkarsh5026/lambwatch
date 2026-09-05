@@ -668,8 +668,9 @@
 <pre>lambda-watcher 0.1.0 — archiving into ~/.lambda-watcher
 watching ~/Downloads. Press Ctrl-C to stop.
                new  order-processor v0001  order-processor.zip — archived a new version
-               new  order-processor v0002  order-processor (1).zip — archived a new version
-                    review: lambda-watcher diff &quot;order-processor&quot; --html --open
+               new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 3 renamed, 52 vendored
+                    +24/-5 lines · new: 1 env var, 1 AWS service, 3 secrets
+                    report: ~/.lambda-watcher/reports/order-processor/v0001-v0002.html
          unchanged  order-processor v0002  order-processor (2).zip — identical to version 2
 done</pre>
           </div>
@@ -684,7 +685,7 @@ done</pre>
 archive root: ~/.lambda-watcher
 watching:     ~/Downloads
 
-Next: lambda-watcher watch</pre>
+Next: lw start</pre>
           </div>
         </div>
       </details>
@@ -749,7 +750,7 @@ v0002    2026-09-04 05:53     59  8.9 KB  lambda_function…  order-processor
                                                             (1).zip                 
 v0001    2026-09-04 05:53     55  8.1 KB  lambda_function…  order-processo…         
 
-Compare the last two: lambda-watcher diff &quot;order-processor&quot;</pre>
+Compare the last two: lw diff &quot;order-processor&quot;</pre>
           </div>
         </div>
       </details>

@@ -49,6 +49,16 @@ def _run(*args: str):
     return result
 
 
+def _config_watching(config: Path, directory: Path) -> Path:
+    """A config that watches one folder and nothing else.
+
+    Without it `setup` falls back to the real ``~/Downloads``, and `--yes`
+    would archive whatever the person running the suite has in there.
+    """
+    config.write_text(f'watch:\n  dirs: ["{directory.as_posix()}"]\n', encoding="utf-8")
+    return config
+
+
 @pytest.fixture
 def archived(home: Path, downloads: Path):
     _run("ingest", str(_zip(downloads, "order-processor.zip", {
@@ -70,6 +80,77 @@ def test_init_writes_a_config(home: Path, tmp_path: Path):
     assert config.exists()
     assert "watch:" in config.read_text()
     assert "wrote" in result.output
+
+
+def test_bare_invocation_reports_status_rather_than_a_wall_of_commands(home: Path):
+    """The first thing a new user sees should be their situation, not the manual."""
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "not watching" in result.output
+    assert "nothing archived yet" in result.output
+    assert "lw setup" in result.output, "an empty archive has to say what to do next"
+
+
+def test_status_names_the_archive_and_what_to_do_with_it(archived: Path):
+    output = _run("status").output
+    assert "order-processor" in output
+    assert "1 function" in output and "2 versions" in output
+    assert 'lw diff "order-processor"' in output
+
+
+def test_setup_writes_a_config_and_reports_the_watch_folder(
+    home: Path, downloads: Path, tmp_path: Path
+):
+    config = tmp_path / "config.yaml"
+    result = _run("--config", str(config), "setup", "--no-service")
+    assert config.exists()
+    assert "setting up" in result.output
+    assert "archive at" in result.output
+    # Declining the background watcher has to leave a way to get one later.
+    assert "lw start" in result.output
+
+
+def test_setup_leaves_an_existing_config_alone(home: Path, tmp_path: Path):
+    config = _config_watching(tmp_path / "config.yaml", tmp_path)
+    result = _run("--config", str(config), "setup", "--no-service")
+    assert "using" in result.output
+    assert tmp_path.as_posix() in config.read_text(), "an edited config must survive setup"
+
+
+def test_setup_offers_the_zips_already_sitting_in_the_download_folder(
+    home: Path, downloads: Path, tmp_path: Path
+):
+    _zip(downloads, "order-processor.zip", {"lambda_function.py": PY_V1})
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    result = _run("--config", str(config), "setup", "--no-service")
+    assert "found 1 zip" in result.output
+    # Not a tty and not --yes: it names the command rather than archiving
+    # somebody's whole Downloads folder uninvited.
+    assert "lw backfill" in result.output
+    assert "order-processor" not in _run("--config", str(config), "ls").output
+
+
+def test_setup_archives_that_history_when_told_to(home: Path, downloads: Path, tmp_path: Path):
+    _zip(downloads, "order-processor.zip", {"lambda_function.py": PY_V1})
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    _run("--config", str(config), "setup", "--no-service", "--yes")
+    assert "order-processor" in _run("--config", str(config), "ls").output
+
+
+# ----------------------------------------------------------- reports on arrival
+def test_a_new_version_arrives_with_its_comparison_already_rendered(archived: Path):
+    """Nobody is watching a terminal when a background watcher archives something."""
+    reports = archived / "reports" / "order-processor"
+    assert (reports / "latest.html").exists()
+    assert (reports / "v0001-v0002.html").exists()
+    assert "order-processor" in (reports / "latest.html").read_text(encoding="utf-8")
+
+
+def test_the_first_version_of_a_function_has_nothing_to_compare_against(
+    home: Path, downloads: Path
+):
+    _run("ingest", str(_zip(downloads, "solo.zip", {"lambda_function.py": PY_V1})))
+    assert not (home / "reports" / "solo").exists()
 
 
 def test_ingest_ls_and_versions(archived: Path):
@@ -259,6 +340,17 @@ def test_reindex_rebuilds_from_disk(archived: Path):
 
 def test_doctor_runs(home: Path):
     assert "archive root" in _run("doctor").output
+
+
+def test_a_broken_config_is_explained_rather_than_traced(home: Path, tmp_path: Path):
+    """Bare `lw` reads the config, so a hand-edit mistake must not print a traceback."""
+    config = tmp_path / "config.yaml"
+    config.write_text("watch:\n\tdirs: [nope]\n", encoding="utf-8")   # a tab, which YAML forbids
+    result = runner.invoke(app, ["--config", str(config)])
+    assert result.exit_code == 1
+    assert "could not read" in result.output
+    assert str(config) in result.output.replace("\n", "")
+    assert "delete it to fall back to defaults" in result.output
 
 
 def test_unknown_function_is_a_clean_error(archived: Path):

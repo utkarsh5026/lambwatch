@@ -195,6 +195,26 @@ class NotifyConfig:
     enabled: bool = True
     #: Only notify when the new version differs from the previous one.
     only_on_change: bool = True
+    #: Say what changed, not just that something did. A notification reading
+    #: "2 modified, +24/-5 lines, 1 env var" is worth glancing at; one reading
+    #: "34 files, 8.9 KB" is bookkeeping.
+    summarise_changes: bool = True
+
+
+@dataclass
+class ReportConfig:
+    """HTML written without anyone asking for it.
+
+    Once the watcher runs in the background, nobody is looking at a terminal at
+    the moment a version lands. Rendering the comparison right then means the
+    notification can point at a page that already exists, and the answer to
+    "what changed?" is a bookmark rather than a command.
+    """
+
+    #: Render the diff against the previous version as each one is archived.
+    auto_diff: bool = True
+    #: Include vendored dependency files in those automatic diffs.
+    include_vendor: bool = False
 
 
 @dataclass
@@ -206,6 +226,7 @@ class Config:
     diff: DiffConfig = field(default_factory=DiffConfig)
     git_mirror: GitMirrorConfig = field(default_factory=GitMirrorConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    report: ReportConfig = field(default_factory=ReportConfig)
     #: Command `open` launches on a folder. Empty means "find one on PATH".
     editor: str = ""
     log_level: str = "INFO"
@@ -289,6 +310,7 @@ def load_config(path: Path | str | None = None) -> Config:
         diff=_from_dict(DiffConfig, data.get("diff", {})),
         git_mirror=_from_dict(GitMirrorConfig, data.get("git_mirror", {})),
         notify=_from_dict(NotifyConfig, data.get("notify", {})),
+        report=_from_dict(ReportConfig, data.get("report", {})),
         editor=data.get("editor", ""),
         log_level=data.get("log_level", "INFO"),
     )

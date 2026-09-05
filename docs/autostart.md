@@ -1,8 +1,39 @@
 # Running lambda-watcher in the background
 
-`lambda-watcher watch` is a long-running foreground process. To have it start
-with your machine and stay out of the way, register it with your platform's
-service manager.
+```bash
+lw start     # install and start it, now and after every reboot
+lw stop      # stop it (--remove unregisters it as well)
+lw restart   # after editing the config
+lw           # is it running?
+```
+
+That is all most people need, and `lw setup` does it as part of first-time
+setup. `lw start` writes the unit file for your platform, hands it to the
+service manager and reports back — a launchd agent on macOS, a systemd user
+service on Linux, a scheduled task on Windows.
+
+Everything is registered as a **user** service. Nothing here needs sudo: the
+watcher reads one person's downloads folder and writes one person's archive.
+
+The rest of this page is what `lw start` does, for when you want to change it,
+audit it, or do it yourself.
+
+## When there is no service manager to use
+
+On Linux without a systemd user session — WSL images and slim containers
+frequently have none — `lw start` falls back to a plain detached process
+recorded in `~/.lambda-watcher/watcher.pid`, and tells you so. It runs in the
+background and survives the terminal closing, but nothing brings it back after
+a reboot. Either run `lw start` again when you next log in (a shell profile is
+a fine place for it), or give yourself a user session that persists:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+---
+
+## Doing it by hand
 
 In every recipe below, replace `/path/to/.venv/bin/lambda-watcher` with the
 output of `which lambda-watcher` (or the absolute path inside your virtualenv),
@@ -129,10 +160,14 @@ watch:
 ## Checking it is working
 
 ```bash
-lambda-watcher doctor    # config, watch folders, store, git, disk
-lambda-watcher log       # what it has seen recently, including skipped files
+lw           # running? how many versions? what arrived last?
+lw doctor    # config, watch folders, store, git, disk
+lw log       # what it has seen recently, including skipped files
 tail -f ~/.lambda-watcher/logs/watcher.log
+tail -f ~/.lambda-watcher/logs/service.log   # what the service itself printed
 ```
 
 If `doctor` reports a watch directory as `MISSING`, fix `watch.dirs` in the
 config — that is the single most common reason nothing is being archived.
+Run `lw restart` after any config change: the running service is still holding
+the old one.

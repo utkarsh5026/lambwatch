@@ -21,6 +21,45 @@ Running the CLI during development: `.venv/bin/lambda-watcher <cmd>` (alias `lw`
 `python -m lambda_watcher`. Point `LAMBDA_WATCHER_HOME` at a scratch directory so you never
 touch the real `~/.lambda-watcher` archive while testing.
 
+## The goal that outranks the others
+
+**Making this effortless for a non-expert to install, start and read is a primary goal, not
+polish.** The analysis in here is considerably better than the tool is easy, and every remaining
+barrier is in the first five minutes and in the question *"is it even running?"* When a change
+trades ergonomics for capability, ergonomics wins unless the capability is the point of the
+change.
+
+What that means concretely, and what to preserve:
+
+- **Nothing is required before the tool works.** Every config field has a working default and
+  `config.default_download_dirs()` guesses correctly per platform, so `lw setup`, `lw start` and
+  every read command must keep working with no config file at all. A new setting that has to be
+  set before something functions is a bug, not a feature.
+- **Bare `lw` is a status dashboard, not `--help`** (`cli._print_status`, `_next_steps`). It
+  answers *is it running* and *what has it caught*, then names the two commands worth typing
+  next. It must exit 0 and print something useful on an empty archive — that is a normal state
+  to be in, not an error. `no_args_is_help=False` is deliberate.
+- **The watcher is a service, not a process the user babysits.** `lw start` installs a real
+  per-OS **user** service ([service.py](src/lambda_watcher/service.py)) — never a system daemon,
+  never sudo. Every platform gets *something*: Linux with no systemd user session (WSL, slim
+  containers) falls back to a detached process with a pidfile and is told plainly that it will
+  not survive a reboot.
+- **The answer is written before anyone asks for it.** Each new version renders its own
+  comparison during ingest (`Ingestor._render_report`, gated on `report.auto_diff`) into
+  `reports/<function>/latest.html`, because nobody is watching a terminal when a background
+  service archives something. Rendering must never fail an ingest that already succeeded.
+- **Every error names the next command.** `_fail` messages, empty states and `doctor` rows all
+  end in something the reader can type. A message that only reports a state is half-written.
+- **One name in user-facing text: `lw`.** `lambda-watcher` stays the package and the prose name
+  for the tool; every hint, error and doc line the reader is meant to *retype* says `lw`.
+- **Commands are grouped, never hidden.** Every command carries a `rich_help_panel`
+  (`Everyday` / `Watching` / `Reading the archive` / `Housekeeping`). Typer orders the panels by
+  where each panel's first command is registered, so a command's position in `cli.py` decides
+  its panel's position in `--help` — that is why `init` sits down beside `reindex`.
+- **A new command needs a panel and, if it takes a function name,
+  `autocompletion=_complete_function`.** The completer must never raise: it runs inside the
+  user's shell on every TAB.
+
 ## Architecture
 
 A zip lands in Downloads → it becomes version *N* of some Lambda function, archived on disk,
@@ -52,10 +91,10 @@ vendored `package.json`) — because only the installed version is what actually
 | Layer | Files | Role |
 |---|---|---|
 | Config | [config.py](src/lambda_watcher/config.py), [templates.py](src/lambda_watcher/templates.py) | Nested dataclasses, every field defaulted; YAML overlay; `LAMBDA_WATCHER_HOME` / `LAMBDA_WATCHER_CONFIG` env overrides |
-| Intake | [watcher.py](src/lambda_watcher/watcher.py), [ingest.py](src/lambda_watcher/ingest.py), [identify.py](src/lambda_watcher/identify.py), [extract.py](src/lambda_watcher/extract.py) | Watch, wait for stability, name, unpack |
+| Intake | [watcher.py](src/lambda_watcher/watcher.py), [ingest.py](src/lambda_watcher/ingest.py), [identify.py](src/lambda_watcher/identify.py), [extract.py](src/lambda_watcher/extract.py), [service.py](src/lambda_watcher/service.py) | Watch, wait for stability, name, unpack; register the watcher with launchd / systemd / Task Scheduler |
 | Analysis | [analysis/](src/lambda_watcher/analysis/) | One module per facet (runtime, handler, deps, envvars, services, secrets, inventory), composed by `analyse()` |
 | Persistence | [store.py](src/lambda_watcher/store.py), [db.py](src/lambda_watcher/db.py), [gitmirror.py](src/lambda_watcher/gitmirror.py) | Directory layout, SQLite index, git mirror |
-| Presentation | [diffing/](src/lambda_watcher/diffing/), [cli.py](src/lambda_watcher/cli.py) | Compare, render text/HTML, Typer commands |
+| Presentation | [diffing/](src/lambda_watcher/diffing/), [cli.py](src/lambda_watcher/cli.py) | Compare, render text/HTML, Typer commands. `diffing/build.py` assembles a diff from the index — use it rather than calling `compare_versions` with a dozen lookups again |
 
 ### Adding an analysis facet touches seven places
 

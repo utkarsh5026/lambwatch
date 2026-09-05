@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from lambda_watcher.utils import (
     language_for,
     matches_any,
     ref_from_dirname,
+    relative_ts,
     rename_label,
     slugify,
     tree_hash,
@@ -116,3 +118,37 @@ def test_ref_from_dirname_leaves_ordinary_names_alone():
     # is the same call NamingConfig.strip_patterns makes.
     assert ref_from_dirname("payments-v2") is None
     assert ref_from_dirname("report-2024") is None
+
+
+@pytest.mark.parametrize(
+    ("ago", "expected"),
+    [
+        (timedelta(seconds=5), "just now"),
+        (timedelta(minutes=1), "1 minute ago"),
+        (timedelta(minutes=40), "40 minutes ago"),
+        (timedelta(hours=3), "3 hours ago"),
+        (timedelta(days=1, hours=1), "yesterday"),
+        (timedelta(days=5), "5 days ago"),
+        (timedelta(days=21), "3 weeks ago"),
+    ],
+)
+def test_relative_ts_reads_like_a_person_wrote_it(ago, expected):
+    stamp = (datetime.now(timezone.utc) - ago).isoformat()
+    assert relative_ts(stamp) == expected
+
+
+def test_relative_ts_falls_back_to_a_date_once_the_distance_stops_helping():
+    stamp = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    assert relative_ts(stamp) == (datetime.now(timezone.utc) - timedelta(days=400)) \
+        .astimezone().strftime("%Y-%m-%d")
+
+
+def test_relative_ts_survives_a_missing_or_unparsable_stamp():
+    assert relative_ts(None) == "-"
+    assert relative_ts("not a date") == "-"
+
+
+def test_a_stamp_with_no_timezone_is_read_as_utc():
+    """Older manifests wrote naive timestamps; they must not read as decades old."""
+    stamp = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+    assert relative_ts(stamp) == "just now"
