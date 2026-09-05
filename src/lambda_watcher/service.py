@@ -466,6 +466,11 @@ def _pid_alive(pid: int) -> bool:
         pass                                          # not ours; nothing to reap
     except (AttributeError, OSError):
         pass                                          # no usable waitpid here
+    if sys.platform.startswith("win"):
+        # `os.kill(pid, 0)` on Windows is TerminateProcess with an exit code of
+        # zero, not a probe. Nothing selects PidfileManager there, and this
+        # would be a spectacular way to find out otherwise.
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
