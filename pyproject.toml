@@ -65,3 +65,15 @@ ignore = ["UP045", "UP007", "B008"]
 # CSS and HTML string literals do not benefit from being folded.
 "src/lambda_watcher/diffing/render_html.py" = ["E501"]
 "src/lambda_watcher/templates.py" = ["E501"]
+
+# Pylance is the only type checker here — nothing gates on it, but the editor
+# reports across the whole workspace, so keep the rules in one place rather than
+# in each contributor's settings.json. Run it with `pyright` (npm/pipx) to see
+# exactly what the editor sees.
+[tool.pyright]
+include        = ["src", "tests"]
+extraPaths     = ["src"]              # src/ layout: resolves the package before the venv exists
+venvPath       = "."
+venv           = ".venv"
+pythonVersion  = "3.10"               # the floor in requires-python; catches 3.11+ syntax
+typeCheckingMode = "basic"

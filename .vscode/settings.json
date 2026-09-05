@@ -97,14 +97,14 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
   "python.terminal.activateEnvironment": false,
   "python.languageServer": "Pylance",
-  "python.analysis.typeCheckingMode": "basic",
+  // pyproject's [tool.pyright] is the single source of truth for typeCheckingMode
+  // and extraPaths, the same way [tool.ruff] is for lint rules. `pyright` on the
+  // command line reads that block and nothing from this file, so declaring them
+  // here too is exactly how the editor and the CLI start disagreeing.
   // 36 source files — whole-workspace analysis is cheap here and catches breakage
   // in the modules an analysis facet has to be wired through without opening them.
+  // Pylance-only: the CLI already checks everything [tool.pyright] includes.
   "python.analysis.diagnosticMode": "workspace",
-  // src/ layout: resolves `lambda_watcher` even before the venv exists.
-  "python.analysis.extraPaths": [
-    "${workspaceFolder}/src"
-  ],
   // Keep the indexer out of everything that isn't hand-written source.
   "python.analysis.exclude": [
     "**/.venv/**",

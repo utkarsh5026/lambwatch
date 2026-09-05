@@ -12,7 +12,7 @@ import webbrowser
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 from rich.console import Console
@@ -69,7 +69,7 @@ def _open_db(cfg: Config) -> Database:
     return db
 
 
-def _fail(message: str, code: int = 1) -> None:
+def _fail(message: str, code: int = 1) -> NoReturn:
     err_console.print(f"[red]error:[/red] {message}")
     raise typer.Exit(code)
 

@@ -255,6 +255,8 @@ watch:
 store:
   on_ingest: copy            # copy | move | leave
                              # `move` takes the zip out of Downloads once archived
+  strip_wrapper_dir: true    # lift a lone `myrepo-1.2.3/` wrapper to the root, so a
+                             # source archive's ref does not read as a full rewrite
   max_versions_per_function: 0   # 0 keeps everything
 
 naming:
@@ -298,6 +300,14 @@ that fragment maps straight to the right function.
   skips placeholders. Treat a finding as a prompt to look, not a verdict.
 - **Layers are separate functions in AWS**, and they are downloaded separately;
   they will be archived as their own entries.
+- **Source archives work too.** A zip from GitHub (or npm, or `git archive`)
+  wraps everything in a directory named after the ref — `myrepo-1.2.3/` — and
+  names the file the same way. Both are handled: the wrapper is lifted to the
+  root so a re-download diffs as an edit rather than a total rewrite, the ref
+  becomes the version's label, and the ref is stripped from the name so
+  `myrepo-1.2.3.zip`, `myrepo-main.zip` and `myrepo-a1b2c3d.zip` all land as
+  versions of one `myrepo`. A trailing `-v2` is still left alone: it is part of
+  a name far more often than it is a tag.
 - **A filesystem event is not proof that a file was written.** Windows reports
   a zip as modified when an antivirus scan, the search indexer or OneDrive so
   much as touches it — watchdog asks the OS for attribute and last-access

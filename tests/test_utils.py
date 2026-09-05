@@ -8,6 +8,7 @@ from lambda_watcher.utils import (
     is_probably_text,
     language_for,
     matches_any,
+    ref_from_dirname,
     rename_label,
     slugify,
     tree_hash,
@@ -97,3 +98,21 @@ def test_the_pieces_of_a_rename_still_spell_both_paths(old: str, new: str) -> No
     head, was, now, tail = rename_label(old, new)
     assert head + was + tail == old
     assert head + now + tail == new
+
+
+def test_ref_from_dirname_reads_the_ref_a_source_archive_was_cut_from():
+    assert ref_from_dirname("myrepo-1.2.3") == "v1.2.3"
+    assert ref_from_dirname("myrepo-v1.2.3") == "v1.2.3"
+    assert ref_from_dirname("myrepo-1.2.3-rc1") == "v1.2.3-rc1"
+    assert ref_from_dirname("myrepo-main") == "main"
+    assert ref_from_dirname("myrepo-master") == "master"
+    assert ref_from_dirname("myrepo-a1b2c3d") == "a1b2c3d"
+
+
+def test_ref_from_dirname_leaves_ordinary_names_alone():
+    assert ref_from_dirname("order-processor") is None
+    assert ref_from_dirname("myrepo") is None
+    # A bare `-v2` is part of the name far more often than it is a tag, which
+    # is the same call NamingConfig.strip_patterns makes.
+    assert ref_from_dirname("payments-v2") is None
+    assert ref_from_dirname("report-2024") is None
