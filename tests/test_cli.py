@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 import zipfile
@@ -15,6 +14,7 @@ from typer.testing import CliRunner
 from lambda_watcher import cli
 from lambda_watcher.cli import app
 from lambda_watcher.gitmirror import git_available
+from lambda_watcher.utils import rmtree
 from tests.conftest import PY_V1, PY_V2
 
 runner = CliRunner()
@@ -156,7 +156,7 @@ def test_open_with_a_version_hands_over_that_versions_files(archived: Path, monk
 
 
 def test_open_without_a_mirror_falls_back_to_the_newest_files(archived: Path, monkeypatch):
-    shutil.rmtree(archived / "repos" / "order-processor", ignore_errors=True)
+    rmtree(archived / "repos" / "order-processor")
     launched = _editor(monkeypatch)
     result = _run("open", "order-processor", "--editor", EDITOR)
 
@@ -171,6 +171,26 @@ def test_open_print_names_the_folder_and_launches_nothing(archived: Path, monkey
     assert result.output.strip().endswith("code")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="needs an executable bit to plant a fake editor")
+def test_open_keeps_an_editor_path_that_contains_spaces_whole(archived: Path, tmp_path: Path, monkeypatch):
+    r"""The natural Windows spelling is `C:\Program Files\...\code.cmd`."""
+    spaced = tmp_path / "Program Files" / "My Editor"
+    spaced.mkdir(parents=True)
+    fake = spaced / "editor"
+    fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake.chmod(0o755)
+
+    launched = _editor(monkeypatch)
+    _run("open", "order-processor", "1", "--editor", str(fake))
+    assert launched[0][0] == str(fake), "the path was split on its spaces"
+
+
+def test_open_splits_an_editor_command_that_carries_arguments(archived: Path, monkeypatch):
+    launched = _editor(monkeypatch)
+    _run("open", "order-processor", "1", "--editor", f"{EDITOR} -c pass")
+    assert launched[0][:2] == [EDITOR, "-c"]
+
+
 def test_open_refuses_an_editor_that_is_not_installed(archived: Path):
     result = runner.invoke(app, ["open", "order-processor", "--editor", "not-a-real-editor"])
     assert result.exit_code == 1
@@ -181,7 +201,7 @@ def test_open_refuses_an_editor_that_is_not_installed(archived: Path):
 def test_a_mirror_from_an_older_layout_moves_itself(archived: Path, legacy_name: str):
     """Archives that kept the mirror inside the function directory still work."""
     function = archived / "functions" / "order-processor"
-    shutil.rmtree(archived / "repos", ignore_errors=True)
+    rmtree(archived / "repos")
     (function / legacy_name / ".git").mkdir(parents=True)
 
     result = _run("open", "order-processor", "--print")

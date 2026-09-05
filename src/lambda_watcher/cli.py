@@ -27,7 +27,7 @@ from .diffing.render_text import render as render_diff
 from .gitmirror import git_available
 from .ingest import Ingestor
 from .store import Store
-from .utils import format_ts, human_size, setup_logging, slugify
+from .utils import format_ts, human_size, rmtree, setup_logging, slugify
 
 # Commands open the index freely and the process normally exits straight
 # after, so nothing closed it. Windows disagrees: an open SQLite handle makes
@@ -177,6 +177,12 @@ def _resolve_editor(cfg: Config, override: str | None) -> list[str]:
     """
     chosen = (override or cfg.editor).strip()
     if chosen:
+        # A command that resolves as it stands is taken as it stands: on Windows
+        # the natural thing to write is a full path, and shlex would turn
+        # `C:\Program Files\...\code.cmd` into four broken tokens. Splitting is
+        # only for a command that carries arguments.
+        if shutil.which(chosen):
+            return [chosen]
         argv = shlex.split(chosen)
         if not argv:
             _fail("the editor command is empty")
@@ -793,10 +799,10 @@ def merge(
                 destination = dst_versions / version_dir.name
                 if not destination.exists():
                     shutil.move(str(version_dir), str(destination))
-        shutil.rmtree(src_dir, ignore_errors=True)
+        rmtree(src_dir)
     # The target's mirror no longer matches the renumbered versions, but the
     # source's belongs to a function that no longer exists at all.
-    shutil.rmtree(store.repo_dir(src["slug"]), ignore_errors=True)
+    rmtree(store.repo_dir(src["slug"]))
 
     # Directory names still carry the old sequence numbers; re-point the index.
     for version in db.list_versions(int(dst["id"])):
@@ -850,10 +856,12 @@ def remove(
         )
         if not confirm:
             raise typer.Abort()
-    shutil.rmtree(store.function_dir(row["slug"]), ignore_errors=True)
+    rmtree(store.function_dir(row["slug"]))
     # The mirror is a second full copy of the code; leaving it behind would make
-    # "deleted" a lie.
-    shutil.rmtree(store.repo_dir(row["slug"]), ignore_errors=True)
+    # "deleted" a lie. It needs the read-only-tolerant rmtree more than anything
+    # else in the store does: git's object files are read-only by design, and on
+    # Windows shutil.rmtree walks straight past them and reports success.
+    rmtree(store.repo_dir(row["slug"]))
     db.delete_function(int(row["id"]))
     console.print(f"[green]deleted[/green] {row['name']}")
 
