@@ -11,6 +11,7 @@ def test_first_download_creates_version_one(ingestor: Ingestor, make_zip, db):
     assert result.status == "new"
     assert result.function_name == "order-processor"
     assert result.seq == 1
+    assert result.version_dir is not None
     assert (result.version_dir / "code" / "lambda_function.py").exists()
     assert (result.version_dir / "manifest.json").exists()
     assert (result.version_dir / "package.zip").exists()
@@ -84,6 +85,7 @@ def test_move_mode_clears_the_download(cfg, db, make_zip):
     result = ingestor.ingest(source)
     assert result.status == "new"
     assert not source.exists()
+    assert result.version_dir is not None
     assert (result.version_dir / "package.zip").exists()
 
 
@@ -162,6 +164,7 @@ def test_the_wrapper_ref_becomes_the_version_label(ingestor: Ingestor, make_zip)
         make_zip("myrepo-1.2.3.zip", {"myrepo-1.2.3/app.py": PY_V1}),
         function_override="myrepo",
     )
+    assert result.version_dir is not None
     manifest = json.loads((result.version_dir / "manifest.json").read_text())
     assert manifest["version"]["label"] == "v1.2.3"
     assert manifest["archive"]["wrapper_dir"] == "myrepo-1.2.3"
@@ -175,6 +178,7 @@ def test_an_explicit_label_beats_the_wrapper_ref(ingestor: Ingestor, make_zip):
         function_override="myrepo",
         label="before the migration",
     )
+    assert result.version_dir is not None
     manifest = json.loads((result.version_dir / "manifest.json").read_text())
     assert manifest["version"]["label"] == "before the migration"
 
@@ -183,6 +187,7 @@ def test_a_deployment_package_gets_no_label_from_its_layout(ingestor: Ingestor, 
     import json
 
     result = ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    assert result.version_dir is not None
     manifest = json.loads((result.version_dir / "manifest.json").read_text())
     assert manifest["version"]["label"] is None
     assert manifest["archive"]["wrapper_dir"] is None

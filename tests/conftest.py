@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -64,7 +65,7 @@ def cfg(tmp_path: Path) -> Config:
 
 
 @pytest.fixture
-def db(cfg: Config) -> Database:
+def db(cfg: Config) -> Iterator[Database]:
     database = Database(cfg.db_path)
     yield database
     database.close()
