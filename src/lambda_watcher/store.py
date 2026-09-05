@@ -8,6 +8,8 @@
       logs/watcher.log
       reports/
       quarantine/            # archives that failed to extract
+      repos/
+        <slug>/              # optional git mirror, one commit per version
       functions/
         <slug>/
           versions/
@@ -15,7 +17,6 @@
               code/          # the extracted tree
               manifest.json  # full analysis for this version
               package.zip    # the original download (optional)
-          git/               # optional mirror, one commit per version
 
 The directories are the source of truth. ``index.db`` is a rebuildable index.
 """
@@ -30,6 +31,11 @@ from typing import Any
 
 from .config import Config
 from .utils import LOG, rmtree, short_hash
+
+
+#: Where the mirror used to sit, inside the function directory. Both spellings
+#: are migrated: ``git/`` shipped, ``repo/`` was a brief step on the way here.
+LEGACY_REPO_DIRNAMES = ("git", "repo")
 
 
 @dataclass
@@ -61,8 +67,36 @@ class Store:
     def versions_dir(self, slug: str) -> Path:
         return self.function_dir(slug) / "versions"
 
-    def git_dir(self, slug: str) -> Path:
-        return self.function_dir(slug) / "git"
+    def repo_dir(self, slug: str) -> Path:
+        """The function's git mirror: a real working tree you can open in an editor.
+
+        It sits at ``repos/<slug>/`` rather than inside the function directory
+        for one blunt reason — an editor names the window after the folder you
+        opened, and every function opening as "repo" would be useless. Here the
+        folder is called ``order-processor``, which is what you want to read in
+        the sidebar. Generated per-function output already lives this way:
+        ``reports/<slug>/`` is the same shape.
+
+        Older archives kept it under the function directory. Those are moved
+        here on first access, so a store from a previous version keeps working
+        without a reindex.
+        """
+        repo = self.cfg.repos_dir / slug
+        if repo.exists():
+            return repo
+        for name in LEGACY_REPO_DIRNAMES:
+            legacy = self.function_dir(slug) / name
+            if not (legacy / ".git").is_dir():
+                continue
+            try:
+                repo.parent.mkdir(parents=True, exist_ok=True)
+                legacy.rename(repo)
+                LOG.info("moved the git mirror from %s to %s", legacy, repo)
+            except OSError as exc:
+                LOG.warning("could not move %s to %s: %s", legacy, repo, exc)
+                return legacy
+            break
+        return repo
 
     def version_dirname(self, seq: int, tree_hash: str) -> str:
         return f"{seq:04d}-{short_hash(tree_hash)}"
@@ -129,7 +163,11 @@ class Store:
         return target
 
     def discard_original(self, zip_path: Path) -> None:
-        """Used for duplicate downloads when ``on_ingest`` is ``move``."""
+        """Delete a download whose content is already archived, in ``move`` mode.
+
+        Whether this particular file may be removed at all is the caller's
+        decision, not this one's: see ``Ingestor.ingest``.
+        """
         if self.cfg.store.on_ingest != "move":
             return
         try:

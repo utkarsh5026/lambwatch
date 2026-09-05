@@ -88,6 +88,20 @@ def wait_until_stable(
     return False
 
 
+def recently_written(mtime: float, max_age: float) -> bool:
+    """Is this file new enough to be a download that just landed?
+
+    A filesystem event does not mean a file was written. Windows raises
+    "modified" for attribute, security and last-access changes too, so an
+    antivirus scan, the search indexer or OneDrive rehydrating a file
+    re-announces zips that have sat in Downloads for weeks. Their mtime has not
+    moved, which is what tells the two apart.
+    """
+    if max_age <= 0:
+        return True
+    return time.time() - mtime <= max_age
+
+
 class Ingestor:
     """Runs the pipeline. Safe to call repeatedly from a single thread."""
 
@@ -113,7 +127,17 @@ class Ingestor:
         function_override: str | None = None,
         force: bool = False,
         label: str | None = None,
+        *,
+        just_downloaded: bool = True,
     ) -> IngestResult:
+        """Archive one zip.
+
+        ``just_downloaded`` says this file arrived here rather than having been
+        found sitting in place, and only such a file may be cleared out of the
+        watched folder afterwards. A startup scan and a backfill pass ``False``:
+        neither can tell an overnight download from a zip something merely
+        touched.
+        """
         zip_path = Path(zip_path)
         now = utc_now_iso()
 
@@ -122,12 +146,20 @@ class Ingestor:
 
         try:
             zip_sha = sha256_file(zip_path)
-            zip_size = zip_path.stat().st_size
+            source_stat = zip_path.stat()
+            zip_size = source_stat.st_size
             source_mtime = datetime.fromtimestamp(
-                zip_path.stat().st_mtime, tz=timezone.utc
+                source_stat.st_mtime, tz=timezone.utc
             ).isoformat(timespec="seconds")
         except OSError as exc:
             return IngestResult("failed", zip_path, message=f"could not read file: {exc}")
+
+        # Deleting the download is the one step that destroys something outside
+        # the archive, so it takes more than a filesystem event: the file has to
+        # have arrived, and have been written recently enough to be that arrival.
+        may_discard = just_downloaded and recently_written(
+            source_stat.st_mtime, self.cfg.watch.arrival_max_age_seconds
+        )
 
         # 1. Have we already handled this exact download?
         already = self.db.seen_download(zip_sha)
@@ -136,7 +168,8 @@ class Ingestor:
             self.db.log_event("duplicate-download", now, source_path=str(zip_path),
                               detail={"zip_sha256": zip_sha})
             LOG.info("skipping %s: identical download already archived", zip_path.name)
-            self.store.discard_original(zip_path)
+            if may_discard:
+                self.store.discard_original(zip_path)
             return IngestResult(
                 "duplicate-download", zip_path, message="this exact file was already archived"
             )
@@ -192,7 +225,8 @@ class Ingestor:
                 "%s is byte-identical to %s v%04d - nothing new to archive",
                 zip_path.name, ident.name, existing["seq"],
             )
-            self.store.discard_original(zip_path)
+            if may_discard:
+                self.store.discard_original(zip_path)
             return IngestResult(
                 "unchanged", zip_path, ident.name, int(existing["seq"]),
                 self.store.resolve_version_dir(existing["dir"]), tree_hash, ident,
@@ -358,7 +392,7 @@ class Ingestor:
         )
         try:
             commit_version(
-                self.store.git_dir(slug), code_dir, self.cfg.git_mirror, seq, message, now,
+                self.store.repo_dir(slug), code_dir, self.cfg.git_mirror, seq, message, now,
                 vendor_globs=self.cfg.analysis.vendor_globs,
             )
         except (GitUnavailable, RuntimeError, OSError) as exc:

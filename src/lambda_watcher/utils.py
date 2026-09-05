@@ -161,6 +161,43 @@ def human_size(num_bytes: float) -> str:
     return f"{num_bytes:,.1f} PB"
 
 
+def rename_label(old: str, new: str) -> tuple[str, str, str, str]:
+    """A rename split into ``(shared prefix, was, is now, shared suffix)``.
+
+    ``site-packages/boto3-1.34.0.dist-info/METADATA`` becoming
+    ``site-packages/boto3-1.35.20.dist-info/METADATA`` is one version number
+    moving, but written out in full twice it is 90 characters of near-identical
+    path and the reader has to diff it by eye. Naming only the part that moved
+    is what git does, and for the same reason.
+
+    The split lands on separator boundaries, so the middle is always whole path
+    segments or whole ``-``/``.``-delimited pieces of a name rather than a cut
+    through the middle of a word. When the two paths share nothing, the middle
+    is simply both of them entire.
+    """
+    separators = "/-_."
+    head = 0
+    for i, (a, b) in enumerate(zip(old, new, strict=False)):
+        if a != b:
+            break
+        if a in separators:
+            head = i + 1
+    else:
+        head = min(len(old), len(new))
+
+    tail = 0
+    for i, (a, b) in enumerate(
+        zip(reversed(old[head:]), reversed(new[head:]), strict=False)
+    ):
+        if a != b:
+            break
+        if a in separators:
+            tail = i + 1
+
+    stop_old, stop_new = len(old) - tail, len(new) - tail
+    return old[:head], old[head:stop_old], new[head:stop_new], old[stop_old:]
+
+
 def signed(num: int) -> str:
     return f"+{num}" if num > 0 else str(num)
 

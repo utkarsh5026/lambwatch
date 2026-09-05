@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -417,6 +418,15 @@ def main() -> int:
     again = write_zip(downloads / "order-processor (2).zip", V2_FILES,
                       built=(2024, 3, 12, 14, 8, 0))   # same code, packaged again later
 
+    # Space the downloads out in time. The startup scan replays in mtime order,
+    # and on a filesystem with coarse timestamps three zips written in one burst
+    # share an mtime to the nanosecond - which left the order of the `watch`
+    # capture, and so the version numbers in it, up to directory iteration
+    # order. Hours apart, well inside the scan's 24-hour window.
+    for hours_ago, staged in ((3, v1), (2, v2), (1, again)):
+        stamp = time.time() - hours_ago * 3600
+        os.utime(staged, (stamp, stamp))
+
     # ---- intake ------------------------------------------------------------
     capture("init", "lambda-watcher init", wide.run("init"))
     cli.write_config()
@@ -469,8 +479,10 @@ def main() -> int:
 
     capture("search", "lambda-watcher search boto3", cli.run("search", "boto3"))
     capture("log", "lambda-watcher log", cli.run("log"))
-    capture("path", "lambda-watcher path order-processor --git",
-            wide.run("path", "order-processor", "--git"))
+    capture("path", "lambda-watcher path order-processor --repo",
+            wide.run("path", "order-processor", "--repo"))
+    capture("open", "lambda-watcher open order-processor --print",
+            wide.run("open", "order-processor", "--print"))
     capture("git", "lambda-watcher git order-processor log --oneline",
             cli.run("git", "order-processor", "log", "--oneline"))
 

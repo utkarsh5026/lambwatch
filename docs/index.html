@@ -577,15 +577,16 @@
 ├── <b>index.db</b>                        <i># rebuildable index — never the source of truth</i>
 ├── logs/watcher.log
 ├── reports/                        <i># generated HTML, once you ask for it</i>
+├── repos/
+│   └── <b>order-processor</b>/            <i># git mirror: one commit per version, tagged v0001…</i>
 └── functions/
     └── <b>order-processor</b>/
-        ├── versions/
-        │   ├── <b>0001-bd9f77c8</b>/         <i># sequence number + content hash</i>
-        │   │   ├── code/               <i># the unpacked tree</i>
-        │   │   ├── manifest.json       <i># the complete analysis</i>
-        │   │   └── package.zip         <i># the original download</i>
-        │   └── <b>0002-73d375ad</b>/
-        └── git/                        <i># one commit per version, tagged v0001…</i></div>
+        └── versions/
+            ├── <b>0001-bd9f77c8</b>/         <i># sequence number + content hash</i>
+            │   ├── code/               <i># the unpacked tree</i>
+            │   ├── manifest.json       <i># the complete analysis</i>
+            │   └── package.zip         <i># the original download</i>
+            └── <b>0002-73d375ad</b>/</div>
     <div class="note">
       <p>Because every version directory carries a full <code>manifest.json</code>, the whole archive is portable and self-describing. Copy it to another machine, run <code>reindex</code>, and the database rebuilds itself from the manifests.</p>
     </div>
@@ -613,28 +614,26 @@
   <span class="c-dim">↑ these need to exist in the function&#x27;s environment configuration</span>
 
 <span class="c-del">New findings</span>
-    <span class="c-del">high</span> aws-access-key-id  config.py:6  <span class="c-dim">AKIA…LE (20 chars)</span>
-    <span class="c-del">high</span> stripe-key  config.py:7  <span class="c-dim">sk_l…dc (32 chars)</span>
-     <span class="c-dim">low debug-flag  config.py:8  DEBUG = True</span>
+<span class="c-del">high</span>  aws-access-key-id  <span class="c-dim">config.py:6</span>  <span class="c-dim">AKIA…LE (20 chars)</span>
+<span class="c-del">high</span>  stripe-key         <span class="c-dim">config.py:7</span>  <span class="c-dim">sk_l…dc (32 chars)</span>
+ <span class="c-dim">low</span>  debug-flag         <span class="c-dim">config.py:8</span>  <span class="c-dim">DEBUG = True</span>
 
 <span class="c-white">Files</span>
-   path                                                                 +  −  size
-<span class="c-key">~</span>  lambda_function.py                                                   9  2  +322
-<span class="c-key">~</span>  requirements.txt                                                     2  1   +17
-<span class="c-add">+</span>  config.py                                                           10     +235
+   path                                                         +  −  size
+<span class="c-key">~</span>  lambda_function.py                                           9  2  +322
+<span class="c-key">~</span>  requirements.txt                                             2  1   +17
+<span class="c-add">+</span>  config.py                                                   10     +235
 <span class="c-add">+</span>  helpers/__init__.py
-<span class="c-cyan">→</span>  db.py → helpers/db.py                                                1      +33
-<span class="c-cyan">→</span>  <span class="c-dim">site-packages/boto3-1.34.0.dist-info/METADATA →</span>                      1  1    +1
-   <span class="c-dim">site-packages/boto3-1.35.20.dist-info/METADATA</span>
-<span class="c-cyan">→</span>  <span class="c-dim">site-packages/botocore-1.34.0.dist-info/METADATA →</span>                   1  1    +1
-   <span class="c-dim">site-packages/botocore-1.35.20.dist-info/METADATA</span></pre>
+<span class="c-cyan">→</span>  {db → helpers/db}.py                                         1      +33
+<span class="c-cyan">→</span>  <span class="c-dim">site-packages/boto3-1.{34.0 → 35.20}.dist-info/METADATA</span>      1  1    +1
+<span class="c-cyan">→</span>  <span class="c-dim">site-packages/botocore-1.{34.0 → 35.20}.dist-info/METADATA</span>   1  1    +1</pre>
     </div>
     <p>Four things are happening there that a file diff can’t do. The 52 vendored files are hidden and explained as three version numbers instead. A file that moved <em>and</em> was edited is reported as one rename, not an unrelated delete plus add. A new environment variable and a new AWS service are called out as configuration you have to apply before this deploys cleanly. And the credentials that appeared between the two versions get their own section — recorded redacted, so the secret itself never enters the index.</p>
 
     <p>The rename is the one worth looking at closely. <code>db.py</code> moved into a package <em>and</em> gained a line in the same deploy — the case a plain diff can only describe as an unrelated delete plus add:</p>
     <div class="slab">
       <span class="slab-cap">one hunk of the same diff</span>
-<pre><span class="c-dim">──────────────────────────────</span> <span class="c-cyan">db.py → helpers/db.py</span> <span class="c-dim">───────────────────────────────</span>
+<pre><span class="c-dim">───────────────────────────────</span> <span class="c-cyan">{db → helpers/db}.py</span> <span class="c-dim">───────────────────────────────</span>
 <span class="c-del">--- a/db.py</span>
 <span class="c-add">+++ b/helpers/db.py</span>
 <span class="c-key">@@ -9,5 +9,6 @@</span>
@@ -649,7 +648,7 @@
     <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step. It is one file with the stylesheet inlined — the file icons are drawn into the page and the syntax highlighting is computed when it is written, so nothing is fetched — and it survives being emailed or dropped in a bucket:</p>
     <figure class="shot">
       <img src="examples/report-preview.png" width="2320" height="1520" loading="lazy"
-           alt="The HTML diff report for order-processor v0001 to v0002: summary tiles for files changed, lines, dependencies, package size, new findings and vendored files; then tables for dependencies, configuration impact and new findings.">
+           alt="The HTML diff report for order-processor v0001 to v0002: a summary rail reading files changed, lines, dependencies, package size, new findings and vendored files; then tables for dependencies, configuration impact and new findings.">
       <figcaption>lambda-watcher diff order-processor --html · <a href="examples/report/v0001-v0002.html">open the real one</a> · <a href="examples/report/">or its index</a><br>the published copy masks the demo's two fake credentials in the file diff — nothing else is altered</figcaption>
     </figure>
   </section>
@@ -807,22 +806,20 @@ Dependencies
   AWS services added: sqs
   ↑ these need to exist in the function&#x27;s environment configuration
 
-New findings
-    high aws-access-key-id  config.py:6  AKIA…LE (20 chars)
-    high stripe-key  config.py:7  sk_l…dc (32 chars)
-     low debug-flag  config.py:8  DEBUG = True
+New findings                                              
+high  aws-access-key-id  config.py:6  AKIA…LE (20 chars)  
+high  stripe-key         config.py:7  sk_l…dc (32 chars)  
+ low  debug-flag         config.py:8  DEBUG = True        
 
-Files                                                                               
-   path                                                                 +  −  size  
-~  lambda_function.py                                                   9  2  +322  
-~  requirements.txt                                                     2  1   +17  
-+  config.py                                                           10     +235  
-+  helpers/__init__.py                                                              
-→  db.py → helpers/db.py                                                1      +33  
-→  site-packages/boto3-1.34.0.dist-info/METADATA →                      1  1    +1  
-   site-packages/boto3-1.35.20.dist-info/METADATA                                   
-→  site-packages/botocore-1.34.0.dist-info/METADATA →                   1  1    +1  
-   site-packages/botocore-1.35.20.dist-info/METADATA</pre>
+Files                                                                       
+   path                                                         +  −  size  
+~  lambda_function.py                                           9  2  +322  
+~  requirements.txt                                             2  1   +17  
++  config.py                                                   10     +235  
++  helpers/__init__.py                                                      
+→  {db → helpers/db}.py                                         1      +33  
+→  site-packages/boto3-1.{34.0 → 35.20}.dist-info/METADATA      1  1    +1  
+→  site-packages/botocore-1.{34.0 → 35.20}.dist-info/METADATA   1  1    +1</pre>
           </div>
         </div>
       </details>
@@ -845,6 +842,15 @@ Files
         </div>
       </details>
       <details class="cmd">
+        <summary><span class="cmd__name">lw open FN [V]</span><span class="cmd__what">Open the mirror in your editor — one folder named after the function, with every version in its history.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher open order-processor --print</span>
+<pre>~/.lambda-watcher/repos/order-processor</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
         <summary><span class="cmd__name">lw git FN ...</span><span class="cmd__what">Run git inside that function's mirror, where <code>git diff v0002 v0010</code> just works.</span></summary>
         <div class="cmd__out">
           <div class="slab">
@@ -858,8 +864,8 @@ Files
         <summary><span class="cmd__name">lw path FN [V]</span><span class="cmd__what">Print where something lives, for <code>cd "$(lw path order-processor)"</code>.</span></summary>
         <div class="cmd__out">
           <div class="slab">
-            <span class="slab-cap">lambda-watcher path order-processor --git</span>
-<pre>~/.lambda-watcher/functions/order-processor/git</pre>
+            <span class="slab-cap">lambda-watcher path order-processor --repo</span>
+<pre>~/.lambda-watcher/repos/order-processor</pre>
           </div>
         </div>
       </details>

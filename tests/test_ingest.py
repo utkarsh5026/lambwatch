@@ -1,3 +1,5 @@
+import os
+import time
 from pathlib import Path
 
 from lambda_watcher.ingest import Ingestor
@@ -83,6 +85,48 @@ def test_move_mode_clears_the_download(cfg, db, make_zip):
     assert result.status == "new"
     assert not source.exists()
     assert (result.version_dir / "package.zip").exists()
+
+
+def test_move_mode_clears_a_duplicate_download(cfg, db, make_zip):
+    cfg.store.on_ingest = "move"
+    ingestor = Ingestor(cfg, db)
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+
+    again = make_zip("fn-copy.zip", {"lambda_function.py": PY_V1})
+    assert ingestor.ingest(again).status == "duplicate-download"
+    assert not again.exists(), "the same download twice should not pile up in Downloads"
+
+
+def test_move_mode_keeps_a_zip_that_only_turned_up_in_a_scan(cfg, db, make_zip):
+    """A file we found rather than received is not ours to delete.
+
+    A startup scan and a backfill both sweep files that were already sitting
+    there, and neither can tell an overnight download from a zip that something
+    merely touched. Archiving one is fine; removing it is not.
+    """
+    cfg.store.on_ingest = "move"
+    ingestor = Ingestor(cfg, db)
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+
+    found = make_zip("fn-copy.zip", {"lambda_function.py": PY_V1})
+    result = ingestor.ingest(found, just_downloaded=False)
+    assert result.status == "duplicate-download"
+    assert found.exists()
+
+
+def test_move_mode_keeps_a_zip_nothing_has_written_to(cfg, db, make_zip):
+    """The Windows bug this guards: an event arrives, but the file is months old."""
+    cfg.store.on_ingest = "move"
+    ingestor = Ingestor(cfg, db)
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+
+    stale = make_zip("fn-copy.zip", {"lambda_function.py": PY_V1})
+    long_ago = time.time() - 30 * 86400
+    os.utime(stale, (long_ago, long_ago))
+
+    result = ingestor.ingest(stale)  # an antivirus scan, say, not a download
+    assert result.status == "duplicate-download"
+    assert stale.exists()
 
 
 def test_retention_prunes_old_versions(cfg, db, make_zip):

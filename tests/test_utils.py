@@ -1,11 +1,14 @@
 from pathlib import Path
 
+import pytest
+
 from lambda_watcher.utils import (
     count_lines,
     human_size,
     is_probably_text,
     language_for,
     matches_any,
+    rename_label,
     slugify,
     tree_hash,
 )
@@ -55,3 +58,42 @@ def test_language_and_size_formatting():
     assert language_for("index.mjs") == "javascript"
     assert human_size(0) == "0 B"
     assert human_size(1536) == "1.5 KB"
+
+
+# ------------------------------------------------------------ rename labels
+@pytest.mark.parametrize(
+    "old, new, expected",
+    [
+        # The version moved; the 90 characters around it did not.
+        ("site-packages/boto3-1.34.0.dist-info/METADATA",
+         "site-packages/boto3-1.35.20.dist-info/METADATA",
+         ("site-packages/boto3-1.", "34.0", "35.20", ".dist-info/METADATA")),
+        # A file moved into a package, keeping its name and extension.
+        ("db.py", "helpers/db.py", ("", "db", "helpers/db", ".py")),
+        ("a/b/old.py", "a/b/new.py", ("a/b/", "old", "new", ".py")),
+        # Nothing in common: both paths survive whole rather than being cut up.
+        ("totally.py", "different.js", ("", "totally.py", "different.js", "")),
+        # A pure move, where only the directory differs.
+        ("src/handler.py", "app/handler.py", ("", "src", "app", "/handler.py")),
+    ],
+)
+def test_a_rename_is_split_on_separators(old: str, new: str, expected: tuple) -> None:
+    assert rename_label(old, new) == expected
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ("site-packages/boto3-1.34.0.dist-info/METADATA",
+         "site-packages/boto3-1.35.20.dist-info/METADATA"),
+        ("db.py", "helpers/db.py"),
+        ("same.py", "same.py"),
+        ("", "new.py"),
+        ("a", "ab"),
+    ],
+)
+def test_the_pieces_of_a_rename_still_spell_both_paths(old: str, new: str) -> None:
+    """The label is a rewriting of the two paths, so it has to contain them."""
+    head, was, now, tail = rename_label(old, new)
+    assert head + was + tail == old
+    assert head + now + tail == new

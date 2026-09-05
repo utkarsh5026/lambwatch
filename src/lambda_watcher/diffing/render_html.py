@@ -13,8 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..utils import format_ts, human_size, read_text, signed
-from . import icons
+from ..utils import format_ts, human_size, read_text, rename_label, signed
+from . import icons, intraline
 from .compare import FileChange, VersionDiff
 from .highlight import highlight, highlight_lines, language_of
 
@@ -28,11 +28,12 @@ _Painted = list[tuple[str, str]] | None
 CSS = """
 :root {
   color-scheme: light dark;
-  --bg: #ffffff; --panel: #f7f8fa; --border: #e3e6ea; --text: #1b1f24;
-  --muted: #616a76; --accent: #0b62d0;
-  --add-bg: #e7f7ec; --add-fg: #04562a; --add-gutter: #cdeed8;
-  --del-bg: #fdeaec; --del-fg: #7d1220; --del-gutter: #f7ced4;
-  --meta-bg: #eef2f7; --chip: #e8ebef;
+  --bg: #ffffff; --panel: #fafbfc; --sunken: #f1f4f7; --border: #e2e6eb;
+  --rule: #eceff3; --text: #12161b; --muted: #5b6672; --faint: #8a939f;
+  --accent: #0a58ca; --accent-wash: #eaf1fd; --accent-edge: #cfe0fa;
+  --add-bg: #e9f7ee; --add-word: #b4ecc6; --add-gutter: #d5efdd; --add-fg: #0a6634;
+  --del-bg: #fdedef; --del-word: #f8c4cb; --del-gutter: #f7d5da; --del-fg: #96162a;
+  --warn-bg: #f7ecd2; --warn-fg: #6b4a06;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   /* Syntax tokens, One Light. Numbers and constants share a colour on purpose:
      both are literal values, and the eye reads them as the same thing. */
@@ -41,11 +42,12 @@ CSS = """
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1216; --panel: #161b22; --border: #2a313a; --text: #e6edf3;
-    --muted: #9198a1; --accent: #58a6ff;
-    --add-bg: #10261a; --add-fg: #6fd08c; --add-gutter: #17351f;
-    --del-bg: #2a1418; --del-fg: #ff8b95; --del-gutter: #3d1a20;
-    --meta-bg: #1b2129; --chip: #232a33;
+    --bg: #0d1117; --panel: #12171e; --sunken: #1a212a; --border: #262d36;
+    --rule: #1e242c; --text: #e3e9ef; --muted: #96a0ac; --faint: #6e7885;
+    --accent: #6cb0ff; --accent-wash: #16253c; --accent-edge: #294869;
+    --add-bg: #0e2417; --add-word: #1f5c34; --add-gutter: #14311f; --add-fg: #6ddb92;
+    --del-bg: #2a1319; --del-word: #6d2029; --del-gutter: #3b181f; --del-fg: #ff949e;
+    --warn-bg: #3a2d10; --warn-fg: #e6c169;
     --tk-c: #7f848e; --tk-k: #c678dd; --tk-s: #98c379; --tk-n: #d19a66;
     --tk-t: #d19a66; --tk-f: #61afef; --tk-y: #56b6c2;
   }
@@ -54,66 +56,142 @@ CSS = """
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 a { color: var(--accent); }
-.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 80px; }
-header.top { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 20px; }
-h1 { font-size: 21px; margin: 0 0 4px; letter-spacing: -0.01em; }
-h1 .ver { color: var(--accent); font-variant-numeric: tabular-nums; }
+.wrap { max-width: 1140px; margin: 0 auto; padding: 32px 24px 96px; }
+
+/* ---- header ---------------------------------------------------------- */
+header.top { padding-bottom: 18px; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+h1 { font-size: 22px; font-weight: 650; margin: 0; letter-spacing: -0.015em;
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+h1 .ver { font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: 0;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+  background: var(--accent-wash); border: 1px solid var(--accent-edge);
+  border-radius: 5px; padding: 2px 8px; white-space: nowrap; }
+h1 .ver .arrow { color: var(--faint); padding: 0 5px; font-weight: 400; }
 .sub { color: var(--muted); font-size: 13px; }
-h2 { font-size: 15px; margin: 28px 0 10px; letter-spacing: -0.01em; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0 4px; }
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
-.card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.card .v { font-size: 20px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+header.top .sub { margin-top: 9px; }
+
+/* A heading that carries a hairline to the end of the measure: the sections
+   read as sections without a box drawn round each one. */
+h2 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); margin: 32px 0 12px; display: flex; align-items: center; gap: 12px; }
+h2::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+
+/* ---- summary rail ---------------------------------------------------- */
+/* One panel divided by hairlines rather than six floating cards. These numbers
+   are meant to be read across, and separate boxes put a gutter between every
+   pair of them. */
+.stats { display: flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); overflow: hidden; }
+.stat { flex: 1 1 150px; padding: 11px 16px; border-left: 1px solid var(--border); min-width: 0; }
+.stat:first-child { border-left: none; }
+.stat .v { font-size: 19px; font-weight: 620; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 7px; }
+.stat .v .delta { font-size: 12px; font-weight: 500; color: var(--muted);
+  letter-spacing: 0; white-space: nowrap; }
+.stat .k { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.stat .k .hint { color: var(--faint); }
 .add { color: var(--add-fg); } .del { color: var(--del-fg); }
-table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.grid th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px;
-  text-transform: uppercase; letter-spacing: .06em; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-table.grid td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+
+/* ---- tables ---------------------------------------------------------- */
+.scroll { overflow-x: auto; }
+table.grid { border-collapse: collapse; font-size: 13px; width: 100%; }
+table.grid th { text-align: left; color: var(--faint); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .06em; padding: 0 20px 6px 0;
+  border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.grid td { padding: 7px 20px 7px 0; border-bottom: 1px solid var(--rule);
+  vertical-align: top; white-space: nowrap; }
+table.grid th:last-child, table.grid td:last-child { padding-right: 0; width: 100%;
+  white-space: normal; }
 table.grid tr:last-child td { border-bottom: none; }
+table.grid tbody tr:hover td { background: var(--panel); }
+table.grid td.label { width: 210px; color: var(--muted); }
 .mono { font-family: var(--mono); font-size: 12.5px; }
-.chip { display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--chip);
-  font-size: 11px; font-weight: 600; letter-spacing: .02em; }
-.chip.added { background: var(--add-gutter); color: var(--add-fg); }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ---- labels ---------------------------------------------------------- */
+/* Two different things wear a label here, so they are drawn differently: a
+   `chip` classifies a row, a `tok` *is* a name out of the code. */
+.chip { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10.5px;
+  font-weight: 650; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
+  background: var(--sunken); color: var(--muted); }
+.chip.added   { background: var(--add-gutter); color: var(--add-fg); }
 .chip.removed { background: var(--del-gutter); color: var(--del-fg); }
-.chip.modified { background: var(--meta-bg); color: var(--accent); }
-.chip.renamed, .chip.changed { background: var(--meta-bg); color: var(--muted); }
-.chip.high { background: var(--del-gutter); color: var(--del-fg); }
-.chip.medium { background: #f4e6c9; color: #6b4a06; }
-@media (prefers-color-scheme: dark) { .chip.medium { background: #33290f; color: #e8c46a; } }
-.chip.low { background: var(--chip); color: var(--muted); }
-.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 18px 0 8px;
-  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 5; border-bottom: 1px solid var(--border); }
-.toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; }
-.toolbar input[type=search] { flex: 1 1 200px; min-width: 140px; padding: 7px 10px; border-radius: 6px;
+.chip.modified { background: var(--accent-wash); color: var(--accent); }
+.chip.high   { background: var(--del-gutter); color: var(--del-fg); }
+.chip.medium { background: var(--warn-bg); color: var(--warn-fg); }
+.tok { display: inline-block; font-family: var(--mono); font-size: 12px; padding: 1px 7px;
+  border-radius: 4px; background: var(--sunken); border: 1px solid var(--border); }
+.tok.added   { background: var(--add-bg); border-color: var(--add-gutter); color: var(--add-fg); }
+.tok.removed { background: var(--del-bg); border-color: var(--del-gutter); color: var(--del-fg); }
+
+/* ---- toolbar --------------------------------------------------------- */
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;
+  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 5;
+  box-shadow: 0 1px 0 var(--border); }
+.toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; color: var(--faint); }
+.toolbar input[type=search] { flex: 1 1 220px; min-width: 140px; padding: 6px 10px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px; }
-.toolbar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
-.toolbar button { padding: 7px 12px; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--text); font-size: 13px; cursor: pointer; }
-.toolbar button:hover { border-color: var(--accent); color: var(--accent); }
-details.file { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; background: var(--panel); }
-details.file > summary { cursor: pointer; padding: 9px 12px; display: flex; gap: 10px; align-items: center;
-  list-style: none; font-size: 13px; }
+.toolbar input[type=search]:focus { outline: none; border-color: var(--accent); }
+.toolbar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px;
+  align-items: center; cursor: pointer; user-select: none; }
+.toolbar button { padding: 6px 11px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--muted); font-size: 13px; cursor: pointer; }
+.toolbar button:hover { border-color: var(--faint); color: var(--text); }
+
+/* ---- one file -------------------------------------------------------- */
+details.file { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+  background: var(--panel); }
+details.file[open] { background: var(--bg); }
+details.file > summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 10px;
+  align-items: center; list-style: none; font-size: 13px; border-radius: 7px; }
 details.file > summary::-webkit-details-marker { display: none; }
-details.file > summary:hover { background: var(--meta-bg); }
-summary .path { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
+details.file > summary:hover { background: var(--panel); }
+/* The header stays put while a long file scrolls past, so the path is still
+   readable eighty lines into its own diff. */
+details.file[open] > summary { position: sticky; top: var(--toolbar-h, 54px); z-index: 3;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border); border-radius: 7px 7px 0 0; }
+summary .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 summary .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
-summary .stat { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
-.diff { background: var(--bg); border-top: 1px solid var(--border); overflow-x: auto; }
-.diff table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; }
+/* The tint hugs the changed part exactly — padding here would open a gap in
+   the middle of a path and read as though the name contained a space. */
+summary .path .ren { background: var(--sunken); border-radius: 3px; }
+summary .path .was { color: var(--faint); }
+summary .stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
+  display: flex; gap: 8px; align-items: baseline; color: var(--faint); }
+
+/* ---- the diff itself ------------------------------------------------- */
+.diff { overflow-x: auto; border-top: 1px solid var(--border); }
+details.file[open] > .diff { border-top: none; }
+.diff table { border-collapse: collapse; width: 100%; font-family: var(--mono);
+  font-size: 12.5px; line-height: 1.5; }
 .diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
-.diff td.ln { width: 1%; min-width: 46px; text-align: right; color: var(--muted); user-select: none;
-  background: var(--panel); border-right: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-.diff td.mark { width: 1%; padding: 0 2px 0 8px; text-align: center; color: var(--muted); user-select: none; }
-.diff td.code { padding-left: 6px; }
+.diff td.ln { width: 1%; min-width: 40px; padding: 0 8px; text-align: right; color: var(--faint);
+  user-select: none; background: var(--panel); font-variant-numeric: tabular-nums; }
+.diff td.ln + td.ln { border-right: 1px solid var(--border); }
+/* The sign lives in its own unselectable cell so that copying a block of the
+   diff yields the code, not code with markers glued on. It doubles as the
+   spine marking how far an added or removed run reaches. */
+.diff td.mark { width: 1%; padding: 0 4px 0 6px; text-align: center; color: var(--faint);
+  user-select: none; border-left: 2px solid transparent; }
+.diff td.code { padding-left: 4px; width: 100%; }
 .diff tr.add td.code, .diff tr.add td.mark { background: var(--add-bg); }
-.diff tr.add td.mark { color: var(--add-fg); }
-.diff tr.add td.ln { background: var(--add-gutter); }
+.diff tr.add td.mark { color: var(--add-fg); border-left-color: var(--add-fg); }
+.diff tr.add td.ln { background: var(--add-gutter); color: var(--add-fg); }
 .diff tr.del td.code, .diff tr.del td.mark { background: var(--del-bg); }
-.diff tr.del td.mark { color: var(--del-fg); }
-.diff tr.del td.ln { background: var(--del-gutter); }
-.diff tr.hunk td { background: var(--meta-bg); color: var(--muted); font-size: 11.5px; padding: 3px 8px; }
+.diff tr.del td.mark { color: var(--del-fg); border-left-color: var(--del-fg); }
+.diff tr.del td.ln { background: var(--del-gutter); color: var(--del-fg); }
+.diff tr.hunk td { background: var(--sunken); color: var(--faint); font-size: 11.5px;
+  padding: 4px 10px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.diff tr.hunk:first-child td { border-top: none; }
+/* Which words of the line actually changed. This sits on top of the row wash,
+   so it has to be a step stronger than it in both themes. */
+.wd { border-radius: 3px; }
+tr.add .wd { background: var(--add-word); }
+tr.del .wd { background: var(--del-word); }
 .tk-c { color: var(--tk-c); font-style: italic; }
 .tk-k { color: var(--tk-k); }
 .tk-s { color: var(--tk-s); }
@@ -121,10 +199,12 @@ summary .stat { font-variant-numeric: tabular-nums; font-size: 12px; white-space
 .tk-t { color: var(--tk-t); }
 .tk-f { color: var(--tk-f); }
 .tk-y { color: var(--tk-y); }
-.note { color: var(--muted); font-size: 12.5px; padding: 8px 12px; }
-.empty { color: var(--muted); padding: 12px 0; }
-footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border);
-  color: var(--muted); font-size: 12px; }
+.note { color: var(--muted); font-size: 12.5px; padding: 10px 12px; border-top: 1px solid var(--border); }
+.note code { font-family: var(--mono); font-size: 12px; background: var(--sunken);
+  padding: 1px 5px; border-radius: 4px; }
+.empty { color: var(--muted); padding: 16px 0; }
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border);
+  color: var(--faint); font-size: 12px; line-height: 1.7; }
 .hidden { display: none !important; }
 """
 
@@ -151,6 +231,14 @@ JS = """
 
   if (search) search.addEventListener('input', apply);
   if (vendorToggle) vendorToggle.addEventListener('change', apply);
+
+  var toolbar = document.querySelector('.toolbar');
+  function measure() {
+    if (!toolbar) return;
+    document.documentElement.style.setProperty('--toolbar-h', toolbar.offsetHeight + 'px');
+  }
+  window.addEventListener('resize', measure);
+  measure();
 
   var expand = document.getElementById('expand-all');
   var collapse = document.getElementById('collapse-all');
@@ -205,6 +293,36 @@ def _diff_rows(change: FileChange) -> list[_Row]:
     return rows
 
 
+def _intraline(rows: list[_Row]) -> dict[int, list[tuple[int, int]]]:
+    """Character ranges worth marking, keyed by the row they belong to.
+
+    Only a removed run with an added run immediately after it is considered:
+    that is what a rewrite looks like in a unified diff. An added block with
+    nothing before it is a line arriving, not a line changing, and has no
+    counterpart to compare it against.
+    """
+    spans: dict[int, list[tuple[int, int]]] = {}
+    at = 0
+    while at < len(rows):
+        if rows[at].css != "del":
+            at += 1
+            continue
+        start = at
+        while at < len(rows) and rows[at].css == "del":
+            at += 1
+        middle = at
+        while at < len(rows) and rows[at].css == "add":
+            at += 1
+        removed = [r.text for r in rows[start:middle]]
+        added = [r.text for r in rows[middle:at]]
+        for old_i, new_i in intraline.pair_rows(removed, added):
+            before, after = intraline.word_diff(removed[old_i], added[new_i])
+            if before or after:
+                spans[start + old_i] = before
+                spans[middle + new_i] = after
+    return spans
+
+
 def _paint(root: Path | None, path: str | None, lang: str) -> list[tuple[str, str]] | None:
     """One file as ``(source line, highlighted line)`` pairs, or None if unreadable.
 
@@ -244,18 +362,23 @@ def _row_code(row: _Row, lang: str, old: _Painted, new: _Painted) -> str:
 
 def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | None = None) -> str:
     lang = language_of(change.path, change.lang)
-    title = (
-        f"{_esc(change.old_path)} → {_esc(change.path)}"
-        if change.kind == "renamed" and change.old_path
-        else _esc(change.path)
-    )
+    # A rename is one file, not two. Written out in full twice, the two paths
+    # are near-identical and the reader has to diff 90 characters by eye to
+    # find the part that moved; so only that part is written twice.
+    title = _esc(change.path)
+    if change.kind == "renamed" and change.old_path:
+        head, was, now, tail = rename_label(change.old_path, change.path)
+        title = (
+            f'{_esc(head)}<span class="ren"><span class="was">{_esc(was)}</span>'
+            f' → {_esc(now)}</span>{_esc(tail)}'
+        )
     stat = ""
     if change.added_lines:
-        stat += f'<span class="add">+{change.added_lines}</span> '
+        stat += f'<span class="add">+{change.added_lines}</span>'
     if change.removed_lines:
-        stat += f'<span class="del">−{change.removed_lines}</span> '
+        stat += f'<span class="del">−{change.removed_lines}</span>'
     if change.size_delta:
-        stat += f'<span style="color:var(--muted)">{signed(change.size_delta)} B</span>'
+        stat += f"<span>{signed(change.size_delta)} B</span>"
 
     parts = [
         f'<details class="file" data-path="{_esc(change.path)} {_esc(change.old_path or "")}" '
@@ -264,23 +387,23 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
         f'<span class="chip {_esc(change.kind)}">{_esc(change.kind)}</span>',
         f'<span class="path">{icons.file_icon(change.path, lang)}'
         f'<span class="p">{title}</span></span>',
-        f'<span class="stat">{stat}</span>',
+        f'<span class="stat-line">{stat}</span>',
         "</summary>",
     ]
 
     if change.diff_lines:
         old = _paint(a_root, change.old_path or change.path, lang) if change.old else None
         new = _paint(b_root, change.path, lang) if change.new else None
+        rows = _diff_rows(change)
+        marks = _intraline(rows)
         parts.append('<div class="diff"><table>')
-        for row in _diff_rows(change):
+        for index, row in enumerate(rows):
             if row.css == "hunk":
                 parts.append(f'<tr class="hunk"><td colspan="4">{_esc(row.text)}</td></tr>')
                 continue
             css = f' class="{row.css}"' if row.css in ("add", "del") else ""
-            # The sign lives in its own unselectable cell so that copying a
-            # block of the diff yields the code, not code with markers glued on.
             mark = {"add": "+", "del": "\u2212"}.get(row.css, "")
-            code = _row_code(row, lang, old, new)
+            code = intraline.mark(_row_code(row, lang, old, new), marks.get(index, []))
             parts.append(
                 f"<tr{css}>"
                 f'<td class="ln">{row.old_no}</td>'
@@ -307,38 +430,41 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
     return "\n".join(parts)
 
 
-def _cards(diff: VersionDiff) -> str:
+def _stats(diff: VersionDiff) -> str:
+    """The handful of numbers worth reading before opening a single file."""
     counts = diff.counts()
-    changed = sum(counts.values())
     size_a = diff.a_meta.get("total_size", 0)
     size_b = diff.b_meta.get("total_size", 0)
     lines = (
-        f"+{diff.total_added_lines} / −{diff.total_removed_lines}"
+        f'<span class="add">+{diff.total_added_lines}</span>'
+        f'<span class="del">\u2212{diff.total_removed_lines}</span>'
         if diff.diffs_computed
-        else "not computed"
+        else '<span class="delta">not computed</span>'
     )
-    cards = [
-        ("Files changed", str(changed), ""),
-        ("Lines", lines, ""),
-        ("Dependencies", str(len(diff.deps)), ""),
-        ("Package size", human_size(size_b), f"{signed(size_b - size_a)} B"),
+
+    # (value markup, label, what rides beside the value, what rides after the
+    # label). Both asides stay on their own line's baseline, so every cell of
+    # the rail is exactly two lines tall whatever it has to say.
+    stats: list[tuple[str, str, str, str]] = [
+        (str(sum(counts.values())), "files changed", "", ""),
+        (lines, "lines", "", ""),
+        (str(len(diff.deps)), "dependencies", "", ""),
+        (_esc(human_size(size_b)), "package size", f"{signed(size_b - size_a)} B", ""),
     ]
     if diff.findings_new:
-        cards.append(("New findings", str(len(diff.findings_new)), ""))
+        stats.append((str(len(diff.findings_new)), "new findings", "", ""))
     if diff.vendor_files_changed:
-        cards.append(
-            ("Vendored files", str(diff.vendor_files_changed), "re-run with --vendor to see them")
-        )
+        stats.append((str(diff.vendor_files_changed), "vendored files", "", "not shown"))
 
-    html_parts = ['<div class="cards">']
-    for key, value, note in cards:
-        note_html = f'<div class="sub" style="font-size:11px">{_esc(note)}</div>' if note else ""
-        html_parts.append(
-            f'<div class="card"><div class="k">{_esc(key)}</div>'
-            f'<div class="v">{_esc(value)}</div>{note_html}</div>'
+    cells: list[str] = []
+    for value, label, delta, hint in stats:
+        beside = f'<span class="delta">{_esc(delta)}</span>' if delta else ""
+        after = f' <span class="hint">{_esc(hint)}</span>' if hint else ""
+        cells.append(
+            f'<div class="stat"><div class="v">{value}{beside}</div>'
+            f'<div class="k">{_esc(label)}{after}</div></div>'
         )
-    html_parts.append("</div>")
-    return "\n".join(html_parts)
+    return f'<div class="stats">{"".join(cells)}</div>'
 
 
 def _dep_table(diff: VersionDiff) -> str:
@@ -357,9 +483,10 @@ def _dep_table(diff: VersionDiff) -> str:
             "</tr>"
         )
     return (
-        "<h2>Dependencies</h2><table class='grid'>"
-        "<thead><tr><th></th><th>package</th><th>from</th><th>to</th><th>manager</th><th>origin</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
+        "<h2>Dependencies</h2><div class='scroll'><table class='grid'>"
+        "<thead><tr><th></th><th>package</th><th>from</th><th>to</th>"
+        "<th>manager</th><th>origin</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
 
@@ -367,11 +494,13 @@ def _context_section(diff: VersionDiff) -> str:
     blocks: list[str] = []
 
     def listing(label: str, values: list[str], css: str, hint: str = "") -> str:
+        # These are identifiers out of the function's own code, so they are set
+        # in the same face the diff sets them in — not as prose in a sentence.
         if not values:
             return ""
-        chips = " ".join(f'<span class="chip {css}">{_esc(v)}</span>' for v in values)
-        hint_html = f'<div class="sub" style="margin-top:4px">{_esc(hint)}</div>' if hint else ""
-        return f"<tr><td style='width:200px'>{_esc(label)}</td><td>{chips}{hint_html}</td></tr>"
+        chips = " ".join(f'<span class="tok {css}">{_esc(v)}</span>' for v in values)
+        hint_html = f'<div class="sub" style="margin-top:6px">{_esc(hint)}</div>' if hint else ""
+        return f"<tr><td class='label'>{_esc(label)}</td><td>{chips}{hint_html}</td></tr>"
 
     rows = "".join(
         [
@@ -388,19 +517,21 @@ def _context_section(diff: VersionDiff) -> str:
         ]
     )
     if rows:
-        blocks.append(f"<h2>Configuration impact</h2><table class='grid'><tbody>{rows}</tbody></table>")
+        blocks.append(
+            f"<h2>Configuration impact</h2><table class='grid'><tbody>{rows}</tbody></table>"
+        )
 
     if diff.runtime_change or diff.handler_change:
         entries = []
         if diff.runtime_change:
             entries.append(
-                f"<tr><td style='width:200px'>Runtime</td><td class='mono'>"
+                f"<tr><td class='label'>Runtime</td><td class='mono'>"
                 f"{_esc(diff.runtime_change[0])} → {_esc(diff.runtime_change[1])}</td></tr>"
             )
         if diff.handler_change:
             before, after = diff.handler_change
             entries.append(
-                f"<tr><td style='width:200px'>Handler</td><td class='mono'>"
+                f"<tr><td class='label'>Handler</td><td class='mono'>"
                 f"{_esc(before or '?')} → {_esc(after or '?')}</td></tr>"
             )
         blocks.append(f"<h2>Entry point</h2><table class='grid'><tbody>{''.join(entries)}</tbody></table>")
@@ -428,8 +559,8 @@ def _findings_section(diff: VersionDiff) -> str:
         else ""
     )
     table = (
-        "<table class='grid'><thead><tr><th>severity</th><th>kind</th><th>where</th><th>detail</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        "<div class='scroll'><table class='grid'><thead><tr><th>severity</th><th>kind</th>"
+        f"<th>where</th><th>detail</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
         if rows
         else ""
     )
@@ -464,14 +595,15 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
 {icons.sprite()}
 <div class="wrap">
   <header class="top">
-    <h1>{_esc(diff.function_name)} <span class="ver">v{diff.a_seq:04d} → v{diff.b_seq:04d}</span></h1>
+    <h1>{_esc(diff.function_name)}
+      <span class="ver">v{diff.a_seq:04d}<span class="arrow">→</span>v{diff.b_seq:04d}</span></h1>
     <div class="sub">
-      v{diff.a_seq:04d} archived {_esc(a_when)} · v{diff.b_seq:04d} archived {_esc(b_when)}
-      · {_esc(diff.headline())}
+      {_esc(diff.headline())} · v{diff.a_seq:04d} archived {_esc(a_when)},
+      v{diff.b_seq:04d} archived {_esc(b_when)}
     </div>
   </header>
 
-  {_cards(diff)}
+  {_stats(diff)}
   {_dep_table(diff)}
   {_context_section(diff)}
   {_findings_section(diff)}
@@ -529,8 +661,8 @@ def render_timeline(
             f'<td>{_esc(format_ts(entry.get("ingested_at")))}</td>'
             f'<td class="mono">{_esc(entry.get("runtime") or "?")}</td>'
             f'<td class="mono">{_esc(entry.get("handler") or "?")}</td>'
-            f'<td style="text-align:right">{entry.get("file_count", 0):,}</td>'
-            f'<td style="text-align:right">{_esc(human_size(entry.get("total_size", 0)))}</td>'
+            f'<td class="num">{entry.get("file_count", 0):,}</td>'
+            f'<td class="num">{_esc(human_size(entry.get("total_size", 0)))}</td>'
             f'<td class="mono sub">{_esc(str(entry.get("source_name") or ""))}</td>'
             f"<td>{step}</td>"
             "</tr>"
@@ -550,14 +682,14 @@ def render_timeline(
     <h1>{_esc(function_name)}</h1>
     <div class="sub">{len(versions)} archived version(s) · newest first</div>
   </header>
-  <table class="grid">
+  <div class="scroll"><table class="grid">
     <thead><tr>
       <th>version</th><th>archived</th><th>runtime</th><th>handler</th>
-      <th style="text-align:right">files</th><th style="text-align:right">size</th>
+      <th class="num">files</th><th class="num">size</th>
       <th>downloaded as</th><th>change from previous</th>
     </tr></thead>
     <tbody>{''.join(rows)}</tbody>
-  </table>
+  </table></div>
   <footer>Generated by {_esc(generated_by)} on {_esc(datetime.now().strftime('%Y-%m-%d %H:%M'))}.</footer>
 </div>
 </body>

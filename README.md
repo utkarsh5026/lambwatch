@@ -53,6 +53,7 @@ lambda-watcher diff order-processor                    # last two versions, in t
 lambda-watcher diff order-processor --from 2 --to 10   # any two versions
 lambda-watcher diff order-processor --html --open      # a shareable HTML report
 lambda-watcher report order-processor                  # the whole history, browsable
+lambda-watcher open order-processor                    # the whole archive, in your editor
 lambda-watcher git order-processor log -p              # or just use git
 ```
 
@@ -91,22 +92,20 @@ Dependencies
   AWS services added: sqs
   ↑ these need to exist in the function's environment configuration
 
-New findings
-    high aws-access-key-id  config.py:6  AKIA…LE (20 chars)
-    high stripe-key  config.py:7  sk_l…dc (32 chars)
-     low debug-flag  config.py:8  DEBUG = True
+New findings                                              
+high  aws-access-key-id  config.py:6  AKIA…LE (20 chars)  
+high  stripe-key         config.py:7  sk_l…dc (32 chars)  
+ low  debug-flag         config.py:8  DEBUG = True        
 
-Files                                                                               
-   path                                                                 +  −  size  
-~  lambda_function.py                                                   9  2  +322  
-~  requirements.txt                                                     2  1   +17  
-+  config.py                                                           10     +235  
-+  helpers/__init__.py                                                              
-→  db.py → helpers/db.py                                                1      +33  
-→  site-packages/boto3-1.34.0.dist-info/METADATA →                      1  1    +1  
-   site-packages/boto3-1.35.20.dist-info/METADATA                                   
-→  site-packages/botocore-1.34.0.dist-info/METADATA →                   1  1    +1  
-   site-packages/botocore-1.35.20.dist-info/METADATA
+Files                                                                       
+   path                                                         +  −  size  
+~  lambda_function.py                                           9  2  +322  
+~  requirements.txt                                             2  1   +17  
++  config.py                                                   10     +235  
++  helpers/__init__.py                                                      
+→  {db → helpers/db}.py                                         1      +33  
+→  site-packages/boto3-1.{34.0 → 35.20}.dist-info/METADATA      1  1    +1  
+→  site-packages/botocore-1.{34.0 → 35.20}.dist-info/METADATA   1  1    +1
 ```
 
 The 52 vendored files became three version numbers, `db.py` moving into a
@@ -174,6 +173,7 @@ recipes).
 | `diff FN` | Compare two versions. Defaults to the last two. `--from`/`--to`, `--html`, `--open`, `--vendor`, `--no-patch`, `--json`. |
 | `report FN` | Build a browsable HTML history: an index plus a diff for every step. |
 | `export FN [V]` | Get a version back out as a deployable zip (`--zip`) or a plain folder (`--tree`). |
+| `open FN [V]` | Open the function's mirror in your editor — every version in one folder, with history. Name a version to open just its files. |
 | `git FN ...` | Run git inside that function's mirror repo: `lw git order-processor log --oneline`. |
 | `rename OLD NEW` | Fix a misidentified name. `--alias FRAGMENT` remembers the mapping for next time. |
 | `merge SRC DST` | Combine two entries that are really the same Lambda, renumbering by archive time. |
@@ -197,15 +197,16 @@ back from the newest.
 ├── logs/watcher.log
 ├── reports/                        # generated HTML
 ├── quarantine/                     # archives that failed, with a reason file
+├── repos/
+│   └── order-processor/            # git mirror: one commit per version, tagged v0001…
 └── functions/
     └── order-processor/
-        ├── versions/
-        │   ├── 0001-bd9f77c8/
-        │   │   ├── code/           # the extracted tree
-        │   │   ├── manifest.json   # the full analysis
-        │   │   └── package.zip     # the original download
-        │   └── 0002-73d375ad/
-        └── git/                    # one commit per version, tagged v0001…
+        └── versions/
+            ├── 0001-bd9f77c8/
+            │   ├── code/           # the extracted tree
+            │   ├── manifest.json   # the full analysis
+            │   └── package.zip     # the original download
+            └── 0002-73d375ad/
 ```
 
 The directories are the source of truth. `index.db` is a cache you can delete
@@ -214,16 +215,27 @@ copy it to another machine and reindex.
 
 ### The git mirror
 
-Each function gets its own git repository whose working tree is the latest
-version, with one commit per archived version tagged `v0001`, `v0002`, … That
-means every tool you already know works:
+Each function gets its own git repository at `repos/<name>/`, whose working tree
+is the latest version, with one commit per archived version tagged `v0001`,
+`v0002`, … The folder is named after the function on purpose: it is what an
+editor shows as the workspace root, so an open window says `order-processor`
+rather than something generic. Every tool you already know works on it:
 
 ```bash
-cd "$(lambda-watcher path order-processor --git)"
-git diff v0002 v0010                # the diff you originally wanted
+lambda-watcher open order-processor  # VS Code, on the whole repo
+
+cd "$(lambda-watcher path order-processor --repo)"
+git diff v0002 v0010                 # the diff you originally wanted
 git log --oneline --stat
-code .                              # or open it in any git GUI
 ```
+
+`open` finds VS Code, Cursor, Windsurf, VSCodium, Zed or Sublime on your `PATH`
+— set `editor:` in the config (or `LAMBDA_WATCHER_EDITOR`, or `--editor`) to
+name a different one. What you get is a folder of real files, not a diff: the
+sidebar reads `order-processor`, and the editor's own file tree, search, Source
+Control panel and timeline all work, with every earlier version a tag away. Name
+a version — `lambda-watcher open order-processor 3` — to open that version's
+files on their own instead.
 
 One repo per function is the point: your 2nd and 10th version of *one* Lambda
 sit next to each other, with no other function's history in the way.
@@ -235,9 +247,10 @@ Everything is optional. The settings worth knowing:
 
 ```yaml
 watch:
-  dirs: ["~/Downloads"]      # add more if you download from several places
-  stable_seconds: 2.0        # how long a file must stop changing before it is read
-  force_polling: false       # turn on for network shares, VM mounts, WSL
+  dirs: ["~/Downloads"]          # add more if you download from several places
+  stable_seconds: 2.0            # how long a file must stop changing before it is read
+  force_polling: false           # turn on for network shares, VM mounts, WSL
+  arrival_max_age_seconds: 300   # ignore "modified" events for files older than this
 
 store:
   on_ingest: copy            # copy | move | leave
@@ -285,6 +298,14 @@ that fragment maps straight to the right function.
   skips placeholders. Treat a finding as a prompt to look, not a verdict.
 - **Layers are separate functions in AWS**, and they are downloaded separately;
   they will be archived as their own entries.
+- **A filesystem event is not proof that a file was written.** Windows reports
+  a zip as modified when an antivirus scan, the search indexer or OneDrive so
+  much as touches it — watchdog asks the OS for attribute and last-access
+  changes too — so a background sweep re-announces every zip in the folder at
+  once. Events claiming a write to a file nothing has written to are ignored
+  (`watch.arrival_max_age_seconds`), and `store.on_ingest: move` only clears
+  out a download the watcher saw arrive: a zip that a startup scan or a
+  `backfill` merely found is archived where it lies, never deleted.
 - Large vendored packages make for large archives. `store.on_ingest: leave`
   and `store.keep_zip: false` trade the original zips for disk space, and
   `store.max_versions_per_function` caps history.

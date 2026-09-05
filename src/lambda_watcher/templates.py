@@ -36,6 +36,11 @@ watch:
   # Switch on if your Downloads folder is a network share, a VM mount or WSL,
   # where native filesystem events are unreliable.
   force_polling: false
+  # Windows reports a file as "modified" when an antivirus scan, the search
+  # indexer or OneDrive touches it. Anything whose contents were last written
+  # longer ago than this is not treated as a new arrival: the event is ignored,
+  # and `on_ingest: move` never deletes it. 0 turns the check off.
+  arrival_max_age_seconds: 300
   # Pick up zips that arrived while the watcher was not running.
   scan_on_start: true
   scan_on_start_max_age_hours: 24
@@ -86,8 +91,9 @@ diff:
   ignore_globs: ["**/*.pyc", "**/*.so", "**/*.map"]
 
 git_mirror:
-  # Keeps one git repo per function, one commit per version, tagged v0001...
-  # so `git diff v0002 v0010` and any git GUI just work.
+  # Keeps one git repo per function under functions/<name>/repo/, one commit
+  # per version, tagged v0001... so `git diff v0002 v0010`, `lw open` and any
+  # git GUI just work.
   enabled: true
   author_name: lambda-watcher
   author_email: lambda-watcher@localhost
@@ -96,6 +102,10 @@ git_mirror:
 
 notify:
   enabled: true
+
+# What `lw open` launches on a folder. Left empty, it looks for VS Code and
+# friends on PATH. $LAMBDA_WATCHER_EDITOR overrides this.
+editor: ""
 
 log_level: INFO
 """
