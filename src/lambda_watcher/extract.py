@@ -13,7 +13,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from .utils import LOG
+from .utils import LOG, rmtree
 
 
 class ExtractError(RuntimeError):
@@ -30,6 +30,8 @@ class ExtractResult:
     skipped: list[str] = field(default_factory=list)
     top_level: list[str] = field(default_factory=list)
     is_encrypted: bool = False
+    #: Name of the single wrapping directory that was lifted away, if any.
+    wrapper_dir: str | None = None
 
     @property
     def compression_ratio(self) -> float:
@@ -79,11 +81,62 @@ def peek_top_level(zip_path: Path) -> list[str]:
     return tops
 
 
+def strip_wrapper_dir(dest: Path) -> str | None:
+    """Lift a lone wrapping directory's contents up into ``dest``.
+
+    GitHub - and npm, and anything built by ``git archive`` - wraps the whole
+    tree in one directory named after the ref: ``myrepo-main/``,
+    ``myrepo-1.2.3/``, ``myrepo-a1b2c3d/``. That name changes with every
+    download, and both the tree hash and the file diff key off paths, so
+    without this a re-download of the same project reads as "every file
+    removed, every file added" - and never as ``unchanged``.
+
+    Exactly one level is ever removed. A package whose real layout is a single
+    ``src/`` directory keeps it, because collapsing further would start
+    discarding structure the archive actually meant.
+
+    Returns the name of the directory that was removed, or None if the tree was
+    left alone.
+    """
+    try:
+        entries = list(dest.iterdir())
+    except OSError:
+        return None
+    if len(entries) != 1:
+        return None
+    wrapper = entries[0]
+    if wrapper.is_symlink() or not wrapper.is_dir():
+        return None
+
+    # Three renames rather than a move per child: the wrapper steps out to a
+    # sibling, the emptied dest goes away, and the wrapper takes its place.
+    # Cost is the same whether the tree holds ten files or ten thousand.
+    staged = dest.parent / f"{dest.name}.unwrapped"
+    if staged.exists():
+        rmtree(staged)
+    try:
+        wrapper.rename(staged)
+        dest.rmdir()
+        staged.rename(dest)
+    except OSError as exc:
+        LOG.warning("could not unwrap %s, keeping the tree as extracted: %s", wrapper.name, exc)
+        # Undo whichever half of the swap went through.
+        if staged.exists():
+            dest.mkdir(parents=True, exist_ok=True)
+            try:
+                staged.rename(dest / wrapper.name)
+            except OSError:
+                LOG.error("left an unwrapped tree at %s", staged)
+        return None
+    return wrapper.name
+
+
 def extract_zip(
     zip_path: Path,
     dest: Path,
     max_uncompressed_bytes: int = 2 * 1024**3,
     max_files: int = 200_000,
+    strip_wrapper: bool = True,
 ) -> ExtractResult:
     """Extract ``zip_path`` into ``dest``, enforcing the safety limits."""
     dest.mkdir(parents=True, exist_ok=True)
@@ -164,6 +217,10 @@ def extract_zip(
                 except OSError:
                     pass
 
+    if strip_wrapper:
+        result.wrapper_dir = strip_wrapper_dir(dest)
+
+    # Recorded after unwrapping: this is the tree everything downstream sees.
     result.top_level = sorted(
         {p.name for p in dest.iterdir()} if dest.exists() else set()
     )

@@ -86,6 +86,11 @@ class StoreConfig:
     on_ingest: str = "copy"
     #: Keep the original .zip alongside the extracted tree.
     keep_zip: bool = True
+    #: Lift a lone wrapping directory's contents to the root of the version.
+    #: Source archives (GitHub, npm, `git archive`) name that directory after
+    #: the ref, so leaving it in place makes every download look like a total
+    #: rewrite. Turn off to archive trees exactly as the zip laid them out.
+    strip_wrapper_dir: bool = True
     #: Refuse archives whose uncompressed size exceeds this (zip-bomb guard).
     max_uncompressed_mb: int = 2048
     max_files: int = 200_000
@@ -113,6 +118,15 @@ class NamingConfig:
             r"[-_][0-9a-fA-F]{16,64}$",                          # hex blobs / code sha
             r"[-_]\d{10,13}$",                                   # epoch stamps
             r"[-_](copy|final|backup|bak|old|new|latest)$",
+            # A source archive is named after the ref it was cut from, so one
+            # repo downloaded at three refs is still one project. These sit
+            # last: anything date- or epoch-shaped is claimed above first.
+            r"[-_](main|master|develop|trunk|HEAD)$",
+            r"[-_]v?\d+\.\d+(\.\d+)?([-.][A-Za-z0-9.]+)?$",   # 1.2.3, v1.2.3, 2.0.0-rc1
+            # Short commit sha. The lookahead demands at least one digit, so
+            # English words that happen to be all-hex ("defaced", "effaced")
+            # keep their place on the end of a name.
+            r"[-_](?=[0-9a-f]*\d)[0-9a-f]{7,12}$",
         ]
     )
     #: Case-insensitive matching when resolving an existing function.

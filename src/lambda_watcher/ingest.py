@@ -27,7 +27,15 @@ from .gitmirror import GitUnavailable, commit_version, git_available
 from .identify import Identification, identify
 from .notify import notify
 from .store import Store
-from .utils import LOG, human_size, rmtree, sha256_file, short_hash, utc_now_iso
+from .utils import (
+    LOG,
+    human_size,
+    ref_from_dirname,
+    rmtree,
+    sha256_file,
+    short_hash,
+    utc_now_iso,
+)
 
 
 @dataclass
@@ -190,6 +198,7 @@ class Ingestor:
                 code_staging,
                 max_uncompressed_bytes=self.cfg.store.max_uncompressed_mb * 1024 * 1024,
                 max_files=self.cfg.store.max_files,
+                strip_wrapper=self.cfg.store.strip_wrapper_dir,
             )
         except ExtractError as exc:
             rmtree(staging)
@@ -197,6 +206,14 @@ class Ingestor:
             self.db.log_event("failed", now, source_path=str(zip_path), detail=str(exc))
             LOG.error("could not extract %s: %s", zip_path.name, exc)
             return IngestResult("failed", zip_path, ident.name, identification=ident, message=str(exc))
+
+        # A source archive names its wrapper after the ref it was cut from, so
+        # the directory we just lifted away is the best label this version will
+        # ever get. An explicit --label always wins.
+        if label is None and extraction.wrapper_dir:
+            label = ref_from_dirname(extraction.wrapper_dir)
+            if label:
+                LOG.info("labelling this version %s (from %s/)", label, extraction.wrapper_dir)
 
         # 4. Analyse.
         try:
@@ -270,6 +287,7 @@ class Ingestor:
                     "dir_count": extraction.dir_count,
                     "compression_ratio": round(extraction.compression_ratio, 3),
                     "skipped_members": extraction.skipped[:50],
+                    "wrapper_dir": extraction.wrapper_dir,
                 },
                 "previous_seq": int(previous["seq"]) if previous else None,
             }

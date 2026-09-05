@@ -31,9 +31,29 @@ def zip_factory(tmp_path: Path):
         ("notify-1737024000000.zip", "notify"),
         ("MyLambda-backup.zip", "MyLambda"),
         ("my-fn-a1b2c3d4-1111-2222-3333-444455556666.zip", "my-fn"),
+        # Source archives, named after the ref they were cut from.
+        ("myrepo-1.2.3.zip", "myrepo"),
+        ("myrepo-v1.2.3.zip", "myrepo"),
+        ("myrepo-2.0.0-rc1.zip", "myrepo"),
+        ("myrepo-main.zip", "myrepo"),
+        ("myrepo_master.zip", "myrepo"),
+        ("myrepo-a1b2c3d.zip", "myrepo"),
     ],
 )
 def test_filename_heuristics(zip_factory, filename, expected):
+    assert identify(zip_factory(filename), NamingConfig()).name == expected
+
+
+@pytest.mark.parametrize(
+    "filename,expected",
+    [
+        ("payments_api_v3.zip", "payments_api_v3"),   # -v3 is part of the name
+        ("report-2024.zip", "report-2024"),           # a year, not a version
+        ("etl-main-street.zip", "etl-main-street"),   # "main" is not the suffix
+        ("checkout-defaced.zip", "checkout-defaced"),  # all-hex word, but no digit
+    ],
+)
+def test_ref_stripping_leaves_ordinary_names_alone(zip_factory, filename, expected):
     assert identify(zip_factory(filename), NamingConfig()).name == expected
 
 

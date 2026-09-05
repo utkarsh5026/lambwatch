@@ -138,6 +138,36 @@ def slugify(name: str, fallback: str = "unnamed") -> str:
     return slug[:120]
 
 
+# The ref a source-archive directory is named after: `myrepo-1.2.3`,
+# `myrepo-main`, `myrepo-a1b2c3d`. A bare `-v2` is deliberately absent, for the
+# same reason NamingConfig.strip_patterns leaves it alone: it is far more often
+# part of a real name than a version tag.
+_REF_SUFFIX = re.compile(
+    r"[-_](?P<ref>"
+    r"v?\d+\.\d+(?:\.\d+)?(?:[-.][0-9A-Za-z.]+)?"   # 1.2.3, v1.2.3, 1.2.3-rc1
+    r"|main|master|develop|trunk"
+    r"|[0-9a-f]{7,40}"                                # commit sha, short or full
+    r")$"
+)
+
+
+def ref_from_dirname(name: str) -> str | None:
+    """Pull the version ref out of a source-archive directory name.
+
+    ``myrepo-1.2.3`` -> ``v1.2.3``; ``myrepo-main`` -> ``main``. Returns None
+    when the name carries no ref, which is the common case for a deployment
+    package. This only ever produces a label, never an identity, so a name that
+    happens to end in something hex-shaped costs a cosmetic mislabel and
+    nothing more.
+    """
+    match = _REF_SUFFIX.search(name.strip())
+    if not match:
+        return None
+    ref = match.group("ref")
+    # Normalise a bare `1.2.3` to `v1.2.3`; leave `main` and shas as they are.
+    return f"v{ref}" if ref[0].isdigit() else ref
+
+
 def matches_any(path: str, patterns: list[str]) -> bool:
     """True when a posix-style relative path matches any glob pattern."""
     for pattern in patterns:

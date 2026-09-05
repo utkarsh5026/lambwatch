@@ -135,3 +135,25 @@ def test_timeline_renders():
         ],
     )
     assert "v0002" in page and "v0001-v0002.html" in page and "first version" in page
+
+
+def test_a_renamed_wrapper_does_not_read_as_a_rewrite(cfg, db, ingestor: Ingestor, make_zip):
+    """Two source-archive downloads differ only where the code differs.
+
+    Without wrapper stripping every path changes with the ref, so this diff
+    would report one added file and one removed file instead of one edit -
+    and past 150 files rename detection gives up and it stays that way.
+    """
+    ingestor.ingest(
+        make_zip("myrepo-1.2.3.zip", {"myrepo-1.2.3/app.py": PY_V1}),
+        function_override="myrepo",
+    )
+    ingestor.ingest(
+        make_zip("myrepo-1.3.0.zip", {"myrepo-1.3.0/app.py": PY_V2}),
+        function_override="myrepo",
+    )
+    diff = _diff(cfg, db, ingestor, function="myrepo")
+    assert diff.counts() == {
+        "added": 0, "removed": 0, "modified": 1, "renamed": 0, "mode-changed": 0
+    }
+    assert [c.path for c in diff.files] == ["app.py"]
