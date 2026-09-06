@@ -19,6 +19,7 @@ that is exactly where a filesystem watcher gets used.
 
 from __future__ import annotations
 
+import getpass
 import os
 import shutil
 import signal
@@ -66,7 +67,7 @@ class ServiceStatus:
 
 
 # --------------------------------------------------------------- command
-def watch_argv(config_path: Path | None = None) -> list[str]:
+def watch_argv(config_path: Path | None = None, windowless: bool = False) -> list[str]:
     """The command a service manager should run, as absolute argv.
 
     A unit file is read by a daemon with no shell, no virtualenv activation and
@@ -76,6 +77,15 @@ def watch_argv(config_path: Path | None = None) -> list[str]:
     but the console script reads far better in a file a human may open, so it
     wins whenever we can find it next to the running interpreter.
     """
+    if windowless:
+        # A launcher that runs at logon must not flash a console window, and
+        # only the interpreter has a windowless build - the console script does
+        # not.
+        argv = [_python_for_service(), "-m", "lambda_watcher"]
+        if config_path is not None:
+            argv += ["--config", str(Path(config_path).expanduser().resolve())]
+        return [*argv, "watch"]
+
     argv: list[str] = []
     script_dir = Path(sys.executable).parent
     suffixes = (".exe", "") if sys.platform.startswith("win") else ("",)
@@ -149,25 +159,23 @@ class Manager:
     """One platform's way of running something at login and keeping it up."""
 
     name = "none"
+    #: Launchers that run at logon with no console attached set this.
+    windowless = False
 
     def __init__(self, cfg: Config, config_path: Path | None = None) -> None:
         self.cfg = cfg
         self.config_path = config_path
 
-    # Subclasses implement these four; `restart` is derived from them.
+    # Every manager implements these four.
     def install(self) -> ServiceStatus: raise NotImplementedError
     def uninstall(self) -> None: raise NotImplementedError
     def stop(self) -> None: raise NotImplementedError
     def status(self) -> ServiceStatus: raise NotImplementedError
 
-    def restart(self) -> ServiceStatus:
-        self.stop()
-        return self.install()
-
     # -- shared helpers --------------------------------------------------
     @property
     def argv(self) -> list[str]:
-        return watch_argv(self.config_path)
+        return watch_argv(self.config_path, windowless=self.windowless)
 
     @property
     def log_path(self) -> Path:
@@ -347,9 +355,13 @@ class SchtasksManager(Manager):
     def install(self) -> ServiceStatus:
         self._prepare_logs()
         command = " ".join(_win_quote(a) for a in self.argv)
+        # /RU is not decoration. With ONLOGON and no /RU the task fires for *any*
+        # user who logs on, which is a machine-wide change and needs an elevated
+        # prompt - "ERROR: Access is denied." on an ordinary account. Naming the
+        # current user scopes the trigger to them, which they are allowed to do.
         _run([
             "schtasks", "/Create", "/TN", SCHEDULED_TASK, "/TR", command,
-            "/SC", "ONLOGON", "/F", "/RL", "LIMITED",
+            "/SC", "ONLOGON", "/RU", getpass.getuser(), "/F", "/RL", "LIMITED",
         ], check=True)
         # ONLOGON only fires at the *next* logon, so start it once by hand to
         # make `lw start` mean what it says.
@@ -400,8 +412,8 @@ class PidfileManager(Manager):
             proc = subprocess.Popen(
                 self.argv,
                 stdout=handle, stderr=handle, stdin=subprocess.DEVNULL,
-                start_new_session=True,
                 env={**os.environ, **service_environment(self.cfg)},
+                **_detach_kwargs(),
             )
         except OSError as exc:
             handle.close()
@@ -419,12 +431,7 @@ class PidfileManager(Manager):
         pid = self._recorded_pid()
         if pid is None:
             return
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError as exc:
-            raise ServiceError(f"could not stop pid {pid}: {exc}") from exc
+        _terminate(pid)
         self.pid_path.unlink(missing_ok=True)
 
     def status(self) -> ServiceStatus:
@@ -458,6 +465,12 @@ def _pid_alive(pid: int) -> bool:
     caller that outlives the watcher (the test suite, a `lw status` in the same
     session) from reporting a stopped watcher as running.
     """
+    if sys.platform.startswith("win"):
+        # `os.kill(pid, 0)` on Windows is TerminateProcess with an exit code of
+        # zero, not a probe, so asking whether a process is alive would end it.
+        # tasklist only looks.
+        proc = _run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"])
+        return f'"{pid}"' in proc.stdout
     try:
         reaped, _status = os.waitpid(pid, os.WNOHANG)
         if reaped == pid:
@@ -466,11 +479,6 @@ def _pid_alive(pid: int) -> bool:
         pass                                          # not ours; nothing to reap
     except (AttributeError, OSError):
         pass                                          # no usable waitpid here
-    if sys.platform.startswith("win"):
-        # `os.kill(pid, 0)` on Windows is TerminateProcess with an exit code of
-        # zero, not a probe. Nothing selects PidfileManager there, and this
-        # would be a spectacular way to find out otherwise.
-        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -482,21 +490,138 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-# ---------------------------------------------------------------- factory
-def get_manager(cfg: Config, config_path: Path | None = None) -> Manager:
-    """The right manager for this machine.
+def _terminate(pid: int) -> None:
+    """Ask a process to stop, by whatever means the platform offers."""
+    if sys.platform.startswith("win"):
+        _run(["taskkill", "/PID", str(pid), "/T", "/F"])
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        raise ServiceError(f"could not stop pid {pid}: {exc}") from exc
 
-    Order is per-platform preference with a working fallback, never an error:
-    somebody on WSL should still get a background watcher out of ``lw start``,
-    just one that is honest about not surviving a reboot.
+
+def _detach_kwargs() -> dict[str, object]:
+    """Popen arguments that outlive this process, per platform."""
+    if sys.platform.startswith("win"):
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+        return {"creationflags": flags}
+    return {"start_new_session": True}
+
+
+class StartupFolderManager(PidfileManager):
+    """Windows fallback: a launcher in this user's own Startup folder.
+
+    An account that may not register a scheduled task can still drop a file in
+    its own Startup folder — the oldest per-user autostart Windows has, and the
+    one that needs no privileges whatsoever. It is strictly less capable than
+    Task Scheduler (nothing restarts the watcher if it crashes), which is why it
+    is the second choice rather than the first.
+    """
+
+    name = "startup-folder"
+    windowless = True
+
+    @property
+    def script_path(self) -> Path:
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        return (
+            base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            / "lambda-watcher.cmd"
+        )
+
+    def install(self) -> ServiceStatus:
+        state = super().install()                      # running now, pid recorded
+        self.script_path.parent.mkdir(parents=True, exist_ok=True)
+        self.script_path.write_text(self._script(), encoding="utf-8")
+        state.unit_path = self.script_path
+        state.detail = "starts at logon from your Startup folder"
+        return state
+
+    def uninstall(self) -> None:
+        self.script_path.unlink(missing_ok=True)
+        super().uninstall()
+
+    def status(self) -> ServiceStatus:
+        state = super().status()
+        if self.script_path.exists():
+            state.installed = True
+            state.unit_path = self.script_path
+            if state.running:
+                state.detail = "starts at logon from your Startup folder"
+        return state
+
+    def _script(self) -> str:
+        command = " ".join(_cmd_quote(a) for a in self.argv)
+        env = "".join(f'set "{k}={v}"\n' for k, v in service_environment(self.cfg).items())
+        # `start ""` detaches, so the cmd window this script runs in closes at
+        # once instead of waiting on a watcher that never exits.
+        return f'@echo off\r\n{env}start "" {command}\r\n'
+
+
+# ---------------------------------------------------------------- factory
+def manager_chain(cfg: Config, config_path: Path | None = None) -> list[Manager]:
+    """Every manager this machine might use, best first.
+
+    A chain rather than a single choice because the first one can refuse at the
+    moment of use, not at the moment of selection: a Windows account without the
+    right to register a scheduled task only finds out when schtasks says "Access
+    is denied". Whatever the platform, the last entry always works, so `lw start`
+    ends with a watcher running.
     """
     if sys.platform == "darwin" and shutil.which("launchctl"):
-        return LaunchdManager(cfg, config_path)
+        return [LaunchdManager(cfg, config_path)]
     if sys.platform.startswith("win"):
-        return SchtasksManager(cfg, config_path)
+        return [SchtasksManager(cfg, config_path), StartupFolderManager(cfg, config_path)]
+    chain: list[Manager] = []
     if sys.platform.startswith(("linux", "freebsd")) and SystemdManager.available():
-        return SystemdManager(cfg, config_path)
-    return PidfileManager(cfg, config_path)
+        chain.append(SystemdManager(cfg, config_path))
+    chain.append(PidfileManager(cfg, config_path))
+    return chain
+
+
+def get_manager(cfg: Config, config_path: Path | None = None) -> Manager:
+    """The manager this machine would prefer to use."""
+    return manager_chain(cfg, config_path)[0]
+
+
+def install_service(cfg: Config, config_path: Path | None = None) -> ServiceStatus:
+    """Install the best background watcher this machine will actually accept.
+
+    Falls through the chain rather than reporting the first refusal, because a
+    refusal is usually about privileges rather than about the machine being
+    unable: the returned status names which manager took it, so the caller can
+    say what the user ended up with.
+    """
+    refusals: list[str] = []
+    for manager in manager_chain(cfg, config_path):
+        try:
+            return manager.install()
+        except ServiceError as exc:
+            LOG.debug("%s refused: %s", manager.name, exc)
+            refusals.append(f"{manager.name}: {exc}")
+    raise ServiceError("; ".join(refusals) or "no service manager available")
+
+
+def stop_service(cfg: Config, config_path: Path | None = None, remove: bool = False) -> None:
+    """Stop whichever manager is actually holding the watcher.
+
+    The one that installed it is not necessarily the one this machine would pick
+    today — a scheduled task registered before the account lost that right, say
+    — so every candidate is asked.
+    """
+    for manager in manager_chain(cfg, config_path):
+        try:
+            if not manager.status().installed:
+                continue
+            manager.uninstall() if remove else manager.stop()
+        except ServiceError as exc:
+            LOG.debug("%s could not be stopped: %s", manager.name, exc)
 
 
 def current_status(cfg: Config, config_path: Path | None = None) -> ServiceStatus:
@@ -507,9 +632,13 @@ def current_status(cfg: Config, config_path: Path | None = None) -> ServiceStatu
     machine without a user bus, say), so every manager that could plausibly know
     something gets asked before we report "not installed".
     """
-    manager = get_manager(cfg, config_path)
-    candidates: list[Manager] = [manager]
-    if isinstance(manager, PidfileManager) and sys.platform.startswith("linux"):
+    chain = manager_chain(cfg, config_path)
+    manager = chain[0]
+    candidates = list(chain)
+    if sys.platform.startswith("linux") and not any(
+        isinstance(c, SystemdManager) for c in candidates
+    ):
+        # A unit written while a user session existed outlives the session.
         candidates.append(SystemdManager(cfg, config_path))
     for candidate in candidates:
         try:
@@ -541,6 +670,11 @@ def _sh_quote(value: str) -> str:
         return value
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def _cmd_quote(value: str) -> str:
+    """Quote one argument inside a .cmd script — plain quotes, unlike /TR."""
+    return f'"{value}"' if " " in value else value
 
 
 def _win_quote(value: str) -> str:

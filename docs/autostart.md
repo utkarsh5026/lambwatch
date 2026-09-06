@@ -20,12 +20,18 @@ audit it, or do it yourself.
 
 ## When there is no service manager to use
 
-On Linux without a systemd user session — WSL images and slim containers
-frequently have none — `lw start` falls back to a plain detached process
-recorded in `~/.lambda-watcher/watcher.pid`, and tells you so. It runs in the
-background and survives the terminal closing, but nothing brings it back after
-a reboot. Either run `lw start` again when you next log in (a shell profile is
-a fine place for it), or give yourself a user session that persists:
+`lw start` always leaves you with something running, and says which
+arrangement it managed.
+
+On **Windows**, if registering a scheduled task is refused, it falls back to a
+launcher in your own Startup folder — see below.
+
+On **Linux** without a systemd user session — WSL images and slim containers
+frequently have none — it falls back to a plain detached process recorded in
+`~/.lambda-watcher/watcher.pid`. That survives the terminal closing, but nothing
+brings it back after a reboot. Either run `lw start` again when you next log in
+(a shell profile is a fine place for it), or give yourself a user session that
+persists:
 
 ```bash
 sudo loginctl enable-linger $USER
@@ -127,11 +133,26 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
 
 Register-ScheduledTask -TaskName "lambda-watcher" `
                        -Action $action -Trigger $trigger -Settings $settings `
+                       -User $env:USERNAME `
                        -Description "Archive Lambda deployment zips from Downloads"
 ```
 
+`-User` is not optional. An at-logon task with no user attached fires for
+*anyone* who logs on, which is a machine-wide change: registering it needs an
+elevated prompt, and an ordinary account gets `Access is denied`. Naming
+yourself scopes the trigger to your own logon, which you are allowed to do.
+The `schtasks` equivalent is `/RU %USERNAME%`.
+
 To run without a console window appearing, point the action at
 `pythonw.exe` with `-m lambda_watcher watch` instead.
+
+### If you may not register a task at all
+
+Locked-down machines refuse it however it is scoped. `lw start` notices and
+falls back to a launcher in your own Startup folder
+(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\lambda-watcher.cmd`),
+which needs no privileges whatsoever. It comes back at every logon, but nothing
+restarts it if it crashes — `lw` will tell you if it has stopped.
 
 ---
 

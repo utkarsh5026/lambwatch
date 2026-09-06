@@ -98,6 +98,45 @@ def test_status_names_the_archive_and_what_to_do_with_it(archived: Path):
     assert 'lw diff "order-processor"' in output
 
 
+def test_setup_survives_a_machine_that_will_not_take_a_service(
+    home: Path, downloads: Path, tmp_path: Path, monkeypatch
+):
+    """Everything else setup did still stands; a refused service is not fatal."""
+    from lambda_watcher import service
+
+    def refuse(*_a, **_k):
+        raise service.ServiceError("ERROR: Access is denied.")
+
+    monkeypatch.setattr(cli, "install_service", refuse)
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    result = runner.invoke(app, ["--config", str(config), "setup"])
+    assert result.exit_code == 0, "the archive was set up; only the service was refused"
+    assert config.exists()
+    assert "could not install a background watcher" in result.output
+    assert "lw watch" in result.output, "it has to name the way forward"
+
+
+def test_start_still_fails_loudly_when_no_service_can_be_installed(home: Path, monkeypatch):
+    """`setup` shrugs it off, but `start` has one job."""
+    from lambda_watcher import service
+
+    def refuse(*_a, **_k):
+        raise service.ServiceError("nothing doing")
+
+    monkeypatch.setattr(cli, "install_service", refuse)
+    assert runner.invoke(app, ["start"]).exit_code == 1
+
+
+def test_paths_are_shortened_with_the_platforms_own_separator(monkeypatch, tmp_path: Path):
+    """`~/` pasted onto a Windows relative path produced `~/.lambda-watcher\\config.yaml`."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    import os
+
+    assert cli._home_relative(tmp_path / "a" / "b") == f"~{os.sep}a{os.sep}b"
+    outside = Path("/somewhere/else") if os.sep == "/" else Path("D:/elsewhere")
+    assert cli._home_relative(outside) == str(outside)
+
+
 def test_setup_writes_a_config_and_reports_the_watch_folder(
     home: Path, downloads: Path, tmp_path: Path
 ):
