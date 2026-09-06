@@ -176,6 +176,16 @@ class DiffConfig:
     max_diff_lines: int = 2000
     #: Paths never diffed (still tracked for add/remove).
     ignore_globs: list[str] = field(default_factory=lambda: ["**/*.pyc", "**/*.so", "**/*.map"])
+    #: How many file pairs rename detection may score before it stops and says
+    #: so. Comparing files that moved *and* changed is quadratic in the number
+    #: of candidates, so a restructure of a few thousand files needs a ceiling
+    #: somewhere; raise this to trade seconds for a complete rename map.
+    max_rename_pairs: int = 120_000
+    #: How many files have to move between the same two directories before the
+    #: diff reports the move once instead of once per file. One directory
+    #: rename otherwise arrives as N rows that differ only in the filename at
+    #: the end. Set it very high to always list every file separately.
+    min_moved_files: int = 3
 
 
 @dataclass

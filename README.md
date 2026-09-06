@@ -17,10 +17,11 @@ $ lambda-watcher watch
 lambda-watcher 0.1.1 — archiving into ~/.lambda-watcher
 watching ~/Downloads. Press Ctrl-C to stop.
                new  order-processor v0001  order-processor.zip — archived a new version
-               new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 3 renamed, 52 vendored
+               new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 9 renamed, 55 vendored
                     +24/-5 lines · new: 1 env var, 1 AWS service, 3 secrets
                     report: ~/.lambda-watcher/reports/order-processor/v0001-v0002.html
          unchanged  order-processor v0002  order-processor (2).zip — identical to version 2
+done
 ```
 
 That third line is the one that matters: the same code, downloaded again, is
@@ -79,9 +80,9 @@ files and 56 of them are `site-packages/`:
 $ lambda-watcher diff order-processor
 ╭──────────────────────────────────────────────────────────────────────╮
 │ order-processor   v0001 → v0002                                      │
-│ 2 added  2 modified  3 renamed  52 vendored (hidden)  +24 / -5 lines │
+│ 2 added  2 modified  9 renamed  55 vendored (hidden)  +24 / -5 lines │
 ╰──────────────────────────────────────────────────────────────────────╯
-  size     8.1 KB → 8.9 KB (+782 B)
+  size     8.3 KB → 9.2 KB (+886 B)
 
 Dependencies                                      
    manager  package   from    to       origin     
@@ -98,21 +99,24 @@ high  aws-access-key-id  config.py:6  AKIA…LE (20 chars)
 high  stripe-key         config.py:7  sk_l…dc (32 chars)  
  low  debug-flag         config.py:8  DEBUG = True        
 
-Files                                                                       
-   path                                                         +  −  size  
-~  lambda_function.py                                           9  2  +322  
-~  requirements.txt                                             2  1   +17  
-+  config.py                                                   10     +235  
-+  helpers/__init__.py                                                      
-→  {db → helpers/db}.py                                         1      +33  
-→  site-packages/boto3-1.{34.0 → 35.20}.dist-info/METADATA      1  1    +1  
-→  site-packages/botocore-1.{34.0 → 35.20}.dist-info/METADATA   1  1    +1
+Files                                                                               
+   path                                                                 +  −  size  
+~  lambda_function.py                                                   9  2  +322  
+~  requirements.txt                                                     2  1   +17  
++  config.py                                                           10     +235  
++  helpers/__init__.py                                                              
+→  {db → helpers/db}.py                                                 1      +33  
+→  site-packages/boto3-1.{34.0 → 35.20}.dist-info/ · 4 files, 1         1  1    +1  
+   edited                                                                           
+→  site-packages/botocore-1.{34.0 → 35.20}.dist-info/ · 4 files, 1      1  1    +1  
+   edited
 ```
 
-The 52 vendored files became three version numbers, `db.py` moving into a
-package is one rename rather than a delete plus an add, and the new environment
-variable, the new AWS service and the three secret findings are changes that a
-file diff cannot express at all.
+The 55 vendored files became three version numbers, `db.py` moving into a
+package is one rename rather than a delete plus an add, each bumped package's
+`dist-info` is one line rather than four, and the new environment variable, the
+new AWS service and the three secret findings are changes that a file diff
+cannot express at all.
 
 That capture is not illustrative — it is the output of
 [`docs/examples/build_demo.py`](docs/examples/build_demo.py), which builds the
@@ -245,11 +249,11 @@ back from the newest.
 └── functions/
     └── order-processor/
         └── versions/
-            ├── 0001-bd9f77c8/
+            ├── 0001-7fc98e0e/
             │   ├── code/           # the extracted tree
             │   ├── manifest.json   # the full analysis
             │   └── package.zip     # the original download
-            └── 0002-73d375ad/
+            └── 0002-7f887035/
 ```
 
 The directories are the source of truth. `index.db` is a cache you can delete

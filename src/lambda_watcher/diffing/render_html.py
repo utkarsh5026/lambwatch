@@ -15,7 +15,7 @@ from typing import Any
 
 from ..utils import format_ts, human_size, read_text, rename_label, signed
 from . import icons, intraline
-from .compare import FileChange, VersionDiff
+from .compare import FileChange, MoveGroup, VersionDiff
 from .highlight import highlight, highlight_lines, language_of
 
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -205,6 +205,9 @@ tr.del .wd { background: var(--del-word); }
 .empty { color: var(--muted); padding: 16px 0; }
 footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border);
   color: var(--faint); font-size: 12px; line-height: 1.7; }
+.moved-list { margin: 0; padding: 10px 16px 12px 34px; list-style: disc;
+  color: var(--muted); font-size: 12px; line-height: 1.9; }
+.moved-list .hint { color: var(--faint); }
 .hidden { display: none !important; }
 """
 
@@ -223,7 +226,7 @@ JS = """
       var isVendor = el.getAttribute('data-vendor') === '1';
       var ok = (!term || path.indexOf(term) !== -1) && (showVendor || !isVendor);
       el.classList.toggle('hidden', !ok);
-      if (ok) shown++;
+      if (ok) shown += parseInt(el.getAttribute('data-files') || '1', 10);
     });
     var counter = document.getElementById('shown-count');
     if (counter) counter.textContent = shown + ' of ' + files.length + ' files shown';
@@ -454,6 +457,67 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
     return "\n".join(parts)
 
 
+def _render_move(group: MoveGroup) -> str:
+    """Render one collapsed directory move as a single block, members inside.
+
+    The summary carries the whole decision — both directory names, how many
+    files moved, how many were rewritten on the way — and the body lists the
+    files, so nothing is hidden that expanding will not show. The alternative
+    is twenty blocks whose titles differ only in the filename at the end.
+
+    Kept searchable and filterable like any file block: ``data-path`` holds
+    every member path so the filter box still finds one by name, and
+    ``data-vendor`` is set only when the whole move is vendored, which is the
+    dependency-bump case (``boto3-1.{34.0 → 35.20}.dist-info/``).
+
+    ``data-files`` is how many files this block is the *only* entry for, so the
+    "N of M files shown" counter stays a count of files. The edited members are
+    left out of it because they follow as blocks of their own and would
+    otherwise be counted twice.
+    """
+    head, was, now, tail = rename_label(*group.display_dirs)
+    title = (
+        f'{_esc(head)}<span class="ren"><span class="was">{_esc(was)}</span>'
+        f' → {_esc(now)}</span>{_esc(tail)}/'
+    )
+    count = (
+        f"{group.moved} files moved" if group.is_whole_dir
+        else f"{group.moved} of {group.total_in_old_dir} files moved"
+    )
+    stat = f"<span>{_esc(count)}</span>"
+    if group.edited:
+        stat += f'<span class="del">{group.edited} edited</span>'
+    if group.added_lines:
+        stat += f'<span class="add">+{group.added_lines}</span>'
+    if group.removed_lines:
+        stat += f'<span class="del">−{group.removed_lines}</span>'
+    if group.size_delta:
+        stat += f"<span>{signed(group.size_delta)} B</span>"
+
+    searchable = " ".join(c.path for c in group.members)
+    searchable += " " + " ".join(c.old_path or "" for c in group.members)
+    rows = "".join(
+        f'<li class="mono">{_esc(c.path.rpartition("/")[2])}'
+        + (' <span class="hint">edited</span>' if c.old and c.new
+           and c.old.sha256 != c.new.sha256 else "")
+        + "</li>"
+        for c in group.members
+    )
+    return (
+        f'<details class="file" data-path="{_esc(searchable)}" '
+        f'data-vendor="{1 if group.is_vendor else 0}" '
+        f'data-files="{group.moved - group.edited}">'
+        "<summary>"
+        '<span class="chip renamed">moved</span>'
+        f'<span class="path">{icons.file_icon(group.new_dir + "/", "text")}'
+        f'<span class="p">{title}</span></span>'
+        f'<span class="stat-line">{stat}</span>'
+        "</summary>"
+        f'<ul class="moved-list">{rows}</ul>'
+        "</details>"
+    )
+
+
 def _stats(diff: VersionDiff) -> str:
     """The handful of numbers worth reading before opening a single file."""
     counts = diff.counts()
@@ -479,6 +543,12 @@ def _stats(diff: VersionDiff) -> str:
         stats.append((str(len(diff.findings_new)), "new findings", "", ""))
     if diff.vendor_files_changed:
         stats.append((str(diff.vendor_files_changed), "vendored files", "", "not shown"))
+    if diff.renames_unexamined:
+        # Without this the reader has no way to tell a complete rename map from
+        # one the pair budget cut short.
+        stats.append(
+            (str(diff.renames_unexamined), "files", "", "not rename-checked")
+        )
 
     cells: list[str] = []
     for value, label, delta, hint in stats:
@@ -616,7 +686,18 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
     a_when = format_ts(diff.a_meta.get("ingested_at"))
     b_when = format_ts(diff.b_meta.get("ingested_at"))
 
-    file_blocks = "\n".join(_render_file(c, diff.a_root, diff.b_root) for c in diff.files)
+    blocks: list[str] = []
+    for row in diff.file_rows():
+        if not isinstance(row, MoveGroup):
+            blocks.append(_render_file(row, diff.a_root, diff.b_root))
+            continue
+        # The group block reports the move; it has no room for a diff, so the
+        # members that were rewritten on the way keep their own blocks after it.
+        blocks.append(_render_move(row))
+        blocks.extend(
+            _render_file(c, diff.a_root, diff.b_root) for c in row.edited_members
+        )
+    file_blocks = "\n".join(blocks)
     if not diff.files:
         file_blocks = '<div class="empty">No file-level changes between these versions.</div>'
 

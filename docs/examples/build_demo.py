@@ -160,6 +160,12 @@ MAX_ITEMS = 50
 
 METADATA = "Metadata-Version: 2.1\nName: {name}\nVersion: {version}\nSummary: {summary}\n"
 
+# A real wheel installs five files into its .dist-info, not one. Shipping only
+# METADATA made a dependency bump look like a single moved file, which is the
+# one shape the collapsed-move row never fires on — so the demo was quietly
+# showing an easier problem than the tool actually meets.
+WHEEL = "Wheel-Version: 1.0\nGenerator: bdist_wheel (0.43.0)\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+
 # botocore ships one API model per service, and that is where the bulk of a
 # Python Lambda package actually goes. Carrying a realistic slice of it is the
 # whole point of the "a plain diff is unreadable" example: the noise has to be
@@ -181,9 +187,18 @@ def vendored(packages: dict[str, tuple[str, str]]) -> dict[str, str]:
     for name, (version, summary) in packages.items():
         module = name.replace("-", "_")
         tree[f"site-packages/{module}/__init__.py"] = f'__version__ = "{version}"\n'
-        tree[f"site-packages/{name}-{version}.dist-info/METADATA"] = METADATA.format(
+        dist_info = f"site-packages/{name}-{version}.dist-info"
+        tree[f"{dist_info}/METADATA"] = METADATA.format(
             name=name, version=version, summary=summary
         )
+        tree[f"{dist_info}/WHEEL"] = WHEEL
+        tree[f"{dist_info}/INSTALLER"] = "pip\n"
+        tree[f"{dist_info}/top_level.txt"] = f"{module}\n"
+        # RECORD is deliberately left out. A real one is a hash manifest of every
+        # installed file, which cannot be faked into anything meaningful here,
+        # and a stub of it would pair badly and put a spurious "4 of 5" on a
+        # directory that moved whole. The four above are the ones a wheel
+        # installs whose contents this demo can honestly reproduce.
         if name == "botocore":
             for service in BOTOCORE_SERVICES:
                 # The endpoint list shifts in most botocore releases, so every one

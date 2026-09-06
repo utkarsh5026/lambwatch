@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.text import Text
 
 from ..utils import human_size, rename_label, signed
-from .compare import VersionDiff
+from .compare import MoveGroup, VersionDiff
 
 _KIND_STYLE = {
     "added": "green",
@@ -33,6 +33,30 @@ def _label(change) -> str:
         return change.path
     head, was, now, tail = rename_label(change.old_path, change.path)
     return f"{head}{{{was} \u2192 {now}}}{tail}"
+
+
+def _move_label(group: MoveGroup) -> str:
+    """How one collapsed directory move is named in a listing.
+
+    ``{handlers → lambda/handlers}/ · 20 files``, in the same braces a single
+    rename uses, so the two read as the same kind of fact at different scales.
+    Kept tight because it competes with a vendored path for the width of one
+    table column, and the path is the half that cannot be shortened.
+
+    Two things are said only when they are true, because both are the sort of
+    qualifier that means nothing if it always appears. ``20 of 60 files`` marks
+    a move that left part of the directory behind — a reader told only the two
+    names would fairly conclude the old one is gone. ``3 edited`` marks the
+    files rewritten on the way, which are the ones worth opening; that count
+    comes from the content hashes, so it survives ``--no-patch``.
+    """
+    head, was, now, tail = rename_label(*group.display_dirs)
+    count = (
+        f"{group.moved} files" if group.is_whole_dir
+        else f"{group.moved} of {group.total_in_old_dir} files"
+    )
+    edited = f", {group.edited} edited" if group.edited else ""
+    return f"{head}{{{was} → {now}}}{tail}/ · {count}{edited}"
 
 
 def _stat_line(diff: VersionDiff) -> Text:
@@ -68,7 +92,17 @@ def render_summary(console: Console, diff: VersionDiff) -> None:
     header = Text()
     header.append(diff.function_name, style="bold")
     header.append(f"   v{diff.a_seq:04d} → v{diff.b_seq:04d}", style="bold cyan")
-    console.print(Panel(Group(header, _stat_line(diff)), border_style="cyan", expand=False))
+    rows: list[Text] = [header, _stat_line(diff)]
+    if diff.renames_unexamined:
+        # A partial rename map reads exactly like a complete one, so say so:
+        # some of the adds and removes below may be halves of the same file.
+        rows.append(Text(
+            f"rename check stopped early — {diff.renames_unexamined} added "
+            f"file{'s' if diff.renames_unexamined != 1 else ''} not compared; raise "
+            f"diff.max_rename_pairs in your config (lw init writes one)",
+            style="yellow",
+        ))
+    console.print(Panel(Group(*rows), border_style="cyan", expand=False))
 
     if diff.runtime_change:
         console.print(f"  [bold]runtime[/bold]  {diff.runtime_change[0]} → {diff.runtime_change[1]}")
@@ -188,6 +222,12 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
     before vendored, modified before added — so reading top to bottom means
     reading the most relevant changes first. A file whose diff was skipped
     simply has no patch to print; the table row still records that it changed.
+
+    The table is built from :meth:`~.compare.VersionDiff.file_rows`, not from
+    ``files``, so a directory move takes one row rather than one per file. The
+    patch loop below still walks ``files``: a file that moved *and* was
+    rewritten is folded into the move's row but keeps its own diff, because the
+    row reports the move and the diff reports the edit.
     """
     if not diff.files:
         console.print("\n[dim]No file-level changes.[/dim]")
@@ -203,17 +243,21 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
     table.add_column("size", justify="right", style="dim")
 
     marks = {"added": "+", "removed": "−", "modified": "~", "renamed": "→", "mode-changed": "m"}
-    for change in diff.files[:max_files]:
+    rows = diff.file_rows()
+    for row in rows[:max_files]:
+        move = row if isinstance(row, MoveGroup) else None
         table.add_row(
-            Text(marks.get(change.kind, "?"), style=_KIND_STYLE.get(change.kind, "")),
-            Text(_label(change), style="dim" if change.is_vendor else ""),
-            str(change.added_lines or ""),
-            str(change.removed_lines or ""),
-            signed(change.size_delta) if change.size_delta else "",
+            Text("→" if move else marks.get(row.kind, "?"),
+                 style=_KIND_STYLE["renamed"] if move else _KIND_STYLE.get(row.kind, "")),
+            Text(_move_label(move) if move else _label(row),
+                 style="dim" if row.is_vendor else ""),
+            str(row.added_lines or ""),
+            str(row.removed_lines or ""),
+            signed(row.size_delta) if row.size_delta else "",
         )
     console.print(table)
-    if len(diff.files) > max_files:
-        console.print(f"[dim]… and {len(diff.files) - max_files} more files[/dim]")
+    if len(rows) > max_files:
+        console.print(f"[dim]… and {len(rows) - max_files} more files[/dim]")
 
     if not show_diffs:
         return

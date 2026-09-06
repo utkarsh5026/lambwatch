@@ -508,7 +508,7 @@
         <div class="step__n">07</div>
         <div class="step__body">
           <div class="step__head"><h3>Promote it to version N</h3><span class="step__file">store.py</span></div>
-          <p class="step__what">The scratch directory is moved — not copied — into its permanent home, named for its sequence number and a short content hash: <code>0002-73d375ad</code>. A complete <code>manifest.json</code> is written beside it, and the original zip is kept as <code>package.zip</code>.</p>
+          <p class="step__what">The scratch directory is moved — not copied — into its permanent home, named for its sequence number and a short content hash: <code>0002-7f887035</code>. A complete <code>manifest.json</code> is written beside it, and the original zip is kept as <code>package.zip</code>.</p>
           <p class="step__why">Staging lives on the same disk as the archive, so this is a rename rather than a second full copy of a large tree.</p>
         </div>
       </div>
@@ -582,11 +582,11 @@
 └── functions/
     └── <b>order-processor</b>/
         └── versions/
-            ├── <b>0001-bd9f77c8</b>/         <i># sequence number + content hash</i>
+            ├── <b>0001-7fc98e0e</b>/         <i># sequence number + content hash</i>
             │   ├── code/               <i># the unpacked tree</i>
             │   ├── manifest.json       <i># the complete analysis</i>
             │   └── package.zip         <i># the original download</i>
-            └── <b>0002-73d375ad</b>/</div>
+            └── <b>0002-7f887035</b>/</div>
     <div class="note">
       <p>Because every version directory carries a full <code>manifest.json</code>, the whole archive is portable and self-describing. Copy it to another machine, run <code>reindex</code>, and the database rebuilds itself from the manifests.</p>
     </div>
@@ -594,14 +594,14 @@
 
   <section>
     <h2 id="payoff"><span class="h2-num">THE PAYOFF</span>The diff you actually wanted</h2>
-    <p class="lede">The same two versions the <code>diff -rq</code> at the top choked on. The 52 changed dependency files collapse into three version numbers, and the two changes that never appear in a file diff at all get sections of their own.</p>
+    <p class="lede">The same two versions the <code>diff -rq</code> at the top choked on. The 55 changed dependency files collapse into three version numbers, and the two changes that never appear in a file diff at all get sections of their own.</p>
     <div class="slab">
       <span class="slab-cap">lambda-watcher diff order-processor</span>
 <pre>╭──────────────────────────────────────────────────────────────────────╮
 │ <span class="c-white">order-processor   v0001 → v0002</span>                                      │
-│ <span class="c-add">2 added</span>  <span class="c-key">2 modified</span>  <span class="c-cyan">3 renamed</span>  <span class="c-dim">52 vendored (hidden)</span>  <span class="c-add">+24</span> / <span class="c-del">-5</span> lines │
+│ <span class="c-add">2 added</span>  <span class="c-key">2 modified</span>  <span class="c-cyan">9 renamed</span>  <span class="c-dim">55 vendored (hidden)</span>  <span class="c-add">+24</span> / <span class="c-del">-5</span> lines │
 ╰──────────────────────────────────────────────────────────────────────╯
-  size     8.1 KB → 8.9 KB (+782 B)
+  size     8.3 KB → 9.2 KB (+886 B)
 
 <span class="c-white">Dependencies</span>
    manager  package   from    to       origin
@@ -619,16 +619,18 @@
  <span class="c-dim">low</span>  debug-flag         <span class="c-dim">config.py:8</span>  <span class="c-dim">DEBUG = True</span>
 
 <span class="c-white">Files</span>
-   path                                                         +  −  size
-<span class="c-key">~</span>  lambda_function.py                                           9  2  +322
-<span class="c-key">~</span>  requirements.txt                                             2  1   +17
-<span class="c-add">+</span>  config.py                                                   10     +235
+   path                                                                 +  −  size
+<span class="c-key">~</span>  lambda_function.py                                                   9  2  +322
+<span class="c-key">~</span>  requirements.txt                                                     2  1   +17
+<span class="c-add">+</span>  config.py                                                           10     +235
 <span class="c-add">+</span>  helpers/__init__.py
-<span class="c-cyan">→</span>  {db → helpers/db}.py                                         1      +33
-<span class="c-cyan">→</span>  <span class="c-dim">site-packages/boto3-1.{34.0 → 35.20}.dist-info/METADATA</span>      1  1    +1
-<span class="c-cyan">→</span>  <span class="c-dim">site-packages/botocore-1.{34.0 → 35.20}.dist-info/METADATA</span>   1  1    +1</pre>
+<span class="c-cyan">→</span>  {db → helpers/db}.py                                                 1      +33
+<span class="c-cyan">→</span>  <span class="c-dim">site-packages/boto3-1.{34.0 → 35.20}.dist-info/ · 4 files, 1</span>         1  1    +1
+   <span class="c-dim">edited</span>
+<span class="c-cyan">→</span>  <span class="c-dim">site-packages/botocore-1.{34.0 → 35.20}.dist-info/ · 4 files, 1</span>      1  1    +1
+   <span class="c-dim">edited</span></pre>
     </div>
-    <p>Four things are happening there that a file diff can’t do. The 52 vendored files are hidden and explained as three version numbers instead. A file that moved <em>and</em> was edited is reported as one rename, not an unrelated delete plus add. A new environment variable and a new AWS service are called out as configuration you have to apply before this deploys cleanly. And the credentials that appeared between the two versions get their own section — recorded redacted, so the secret itself never enters the index.</p>
+    <p>Four things are happening there that a file diff can’t do. The 55 vendored files are hidden and explained as three version numbers instead. A file that moved <em>and</em> was edited is reported as one rename, not an unrelated delete plus add, and a directory that moved whole — each bumped package’s <code>dist-info</code> — is reported as one line naming both names and the count, rather than one row per file saying the same thing. A new environment variable and a new AWS service are called out as configuration you have to apply before this deploys cleanly. And the credentials that appeared between the two versions get their own section — recorded redacted, so the secret itself never enters the index.</p>
 
     <p>The rename is the one worth looking at closely. <code>db.py</code> moved into a package <em>and</em> gained a line in the same deploy — the case a plain diff can only describe as an unrelated delete plus add:</p>
     <div class="slab">
@@ -668,7 +670,7 @@
 <pre>lambda-watcher 0.1.1 — archiving into ~/.lambda-watcher
 watching ~/Downloads. Press Ctrl-C to stop.
                new  order-processor v0001  order-processor.zip — archived a new version
-               new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 3 renamed, 52 vendored
+               new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 9 renamed, 55 vendored
                     +24/-5 lines · new: 1 env var, 1 AWS service, 3 secrets
                     report: ~/.lambda-watcher/reports/order-processor/v0001-v0002.html
          unchanged  order-processor v0002  order-processor (2).zip — identical to version 2
@@ -744,11 +746,11 @@ order-processor         2   v0002  2026-09-04 05:53  python   </pre>
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher versions order-processor</span>
-<pre>order-processor                                                                     
-version  archived          files    size  handler           downloaded as    label  
-v0002    2026-09-04 05:53     59  8.9 KB  lambda_function…  order-processor         
-                                                            (1).zip                 
-v0001    2026-09-04 05:53     55  8.1 KB  lambda_function…  order-processo…         
+<pre>order-processor
+version  archived          files    size  handler           downloaded as    label
+v0002    2026-09-06 15:35     68  9.2 KB  lambda_function…  order-processor
+                                                            (1).zip
+v0001    2026-09-06 15:35     61  8.3 KB  lambda_function…  order-processo…
 
 Compare the last two: lw diff &quot;order-processor&quot;</pre>
           </div>
@@ -760,13 +762,13 @@ Compare the last two: lw diff &quot;order-processor&quot;</pre>
           <div class="slab">
             <span class="slab-cap">lambda-watcher show order-processor latest</span>
 <pre>order-processor v0002
-  archived   2026-09-04 05:53
+  archived   2026-09-06 15:35
   source     order-processor (1).zip
   runtime    python (high confidence)
   handler    lambda_function.lambda_handler
-  contents   59 files, 8.9 KB (5 first-party, 57 lines)
-  tree hash  73d375ad10b94e96
-  location   ~/.lambda-watcher/functions/order-processor/versions/0002-73d375ad
+  contents   68 files, 9.2 KB (5 first-party, 57 lines)
+  tree hash  7f887035711ce470
+  location   ~/.lambda-watcher/functions/order-processor/versions/0002-7f887035
 
 Dependencies  2 declared, 3 installed
   boto3 1.35.20
@@ -793,34 +795,36 @@ Findings
             <span class="slab-cap">lambda-watcher diff order-processor</span>
 <pre>╭──────────────────────────────────────────────────────────────────────╮
 │ order-processor   v0001 → v0002                                      │
-│ 2 added  2 modified  3 renamed  52 vendored (hidden)  +24 / -5 lines │
+│ 2 added  2 modified  9 renamed  55 vendored (hidden)  +24 / -5 lines │
 ╰──────────────────────────────────────────────────────────────────────╯
-  size     8.1 KB → 8.9 KB (+782 B)
+  size     8.3 KB → 9.2 KB (+886 B)
 
-Dependencies                                      
-   manager  package   from    to       origin     
-+  pip      pydantic  —       2.9.0    installed  
-~  pip      boto3     1.34.0  1.35.20  installed  
-~  pip      botocore  1.34.0  1.35.20  installed  
+Dependencies
+   manager  package   from    to       origin
++  pip      pydantic  —       2.9.0    installed
+~  pip      boto3     1.34.0  1.35.20  installed
+~  pip      botocore  1.34.0  1.35.20  installed
 
   Env vars added: QUEUE_URL
   AWS services added: sqs
   ↑ these need to exist in the function&#x27;s environment configuration
 
-New findings                                              
-high  aws-access-key-id  config.py:6  AKIA…LE (20 chars)  
-high  stripe-key         config.py:7  sk_l…dc (32 chars)  
- low  debug-flag         config.py:8  DEBUG = True        
+New findings
+high  aws-access-key-id  config.py:6  AKIA…LE (20 chars)
+high  stripe-key         config.py:7  sk_l…dc (32 chars)
+ low  debug-flag         config.py:8  DEBUG = True
 
-Files                                                                       
-   path                                                         +  −  size  
-~  lambda_function.py                                           9  2  +322  
-~  requirements.txt                                             2  1   +17  
-+  config.py                                                   10     +235  
-+  helpers/__init__.py                                                      
-→  {db → helpers/db}.py                                         1      +33  
-→  site-packages/boto3-1.{34.0 → 35.20}.dist-info/METADATA      1  1    +1  
-→  site-packages/botocore-1.{34.0 → 35.20}.dist-info/METADATA   1  1    +1</pre>
+Files
+   path                                                                 +  −  size
+~  lambda_function.py                                                   9  2  +322
+~  requirements.txt                                                     2  1   +17
++  config.py                                                           10     +235
++  helpers/__init__.py
+→  {db → helpers/db}.py                                                 1      +33
+→  site-packages/boto3-1.{34.0 → 35.20}.dist-info/ · 4 files, 1         1  1    +1
+   edited
+→  site-packages/botocore-1.{34.0 → 35.20}.dist-info/ · 4 files, 1      1  1    +1
+   edited</pre>
           </div>
         </div>
       </details>
@@ -838,7 +842,7 @@ Files
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher export order-processor 1 -o rollback.zip</span>
-<pre>wrote ~/rollback.zip (16.2 KB)</pre>
+<pre>wrote ~/rollback.zip (17.4 KB)</pre>
           </div>
         </div>
       </details>
@@ -875,16 +879,22 @@ Files
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher search boto3</span>
-<pre>Files                                                                           
-function         version  path                                            size  
-order-processor  v0002    site-packages/boto3/__init__.py                 24 B  
-order-processor  v0002    site-packages/boto3-1.35.20.dist-info/METADATA  83 B  
-order-processor  v0001    site-packages/boto3/__init__.py                 23 B  
-order-processor  v0001    site-packages/boto3-1.34.0.dist-info/METADATA   82 B  
-Dependencies                                
-function         version  package  version  
-order-processor  v0002    boto3    1.35.20  
-order-processor  v0001    boto3    1.34.0   </pre>
+<pre>Files
+function         version  path                                                size
+order-processor  v0002    site-packages/boto3/__init__.py                     24 B
+order-processor  v0002    site-packages/boto3-1.35.20.dist-info/INSTALLER      4 B
+order-processor  v0002    site-packages/boto3-1.35.20.dist-info/METADATA      83 B
+order-processor  v0002    site-packages/boto3-1.35.20.dist-info/WHEEL         91 B
+order-processor  v0002    site-packages/boto3-1.35.20.dist-info/top_level.t…   6 B
+order-processor  v0001    site-packages/boto3/__init__.py                     23 B
+order-processor  v0001    site-packages/boto3-1.34.0.dist-info/INSTALLER       4 B
+order-processor  v0001    site-packages/boto3-1.34.0.dist-info/METADATA       82 B
+order-processor  v0001    site-packages/boto3-1.34.0.dist-info/WHEEL          91 B
+order-processor  v0001    site-packages/boto3-1.34.0.dist-info/top_level.txt   6 B
+Dependencies
+function         version  package  version
+order-processor  v0002    boto3    1.35.20
+order-processor  v0001    boto3    1.34.0</pre>
           </div>
         </div>
       </details>
@@ -893,18 +903,18 @@ order-processor  v0001    boto3    1.34.0   </pre>
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher log</span>
-<pre>when              event               function         detail                       
-2026-09-04 05:53  duplicate-download  -                order-processor (2).zip      
-                                                       {&quot;zip_sha256&quot;:               
-                                                       &quot;1be974e62ccd675a47aa9bc72…  
-2026-09-04 05:53  unchanged           order-processor  order-processor (2).zip      
-                                                       {&quot;seq&quot;: 2}                   
-2026-09-04 05:53  new-version         order-processor  order-processor (1).zip      
-                                                       {&quot;seq&quot;: 2, &quot;tree_hash&quot;:      
-                                                       &quot;73d375ad10b94e967da67f8be…  
-2026-09-04 05:53  new-version         order-processor  order-processor.zip          
-                                                       {&quot;seq&quot;: 1, &quot;tree_hash&quot;:      
-                                                       &quot;bd9f77c8626b7f3c57ea04987…  </pre>
+<pre>when              event               function         detail
+2026-09-06 15:35  duplicate-download  -                order-processor (2).zip
+                                                       {&quot;zip_sha256&quot;:
+                                                       &quot;707f02c2dae94945d6d2530d1…
+2026-09-06 15:35  unchanged           order-processor  order-processor (2).zip
+                                                       {&quot;seq&quot;: 2}
+2026-09-06 15:35  new-version         order-processor  order-processor (1).zip
+                                                       {&quot;seq&quot;: 2, &quot;tree_hash&quot;:
+                                                       &quot;7f887035711ce470b395beef9…
+2026-09-06 15:35  new-version         order-processor  order-processor.zip
+                                                       {&quot;seq&quot;: 1, &quot;tree_hash&quot;:
+                                                       &quot;7fc98e0e8bb36d603d0286a21…</pre>
           </div>
         </div>
       </details>
@@ -954,7 +964,7 @@ future downloads containing &#x27;order-proc&#x27; will map here automatically</
       <p><strong>Run the examples yourself.</strong> Every capture on this page comes out of one script, against the real pipeline — no AWS account, no network. It builds the <code>order-processor</code> zips, ingests them, and prints each block in the order you just read them:</p>
       <div class="install"><b>python3 -m venv .venv &amp;&amp; .venv/bin/pip install -e ".[dev]"</b>
 <b>.venv/bin/python docs/examples/build_demo.py</b></div>
-      <p>The zips are stamped with a pinned build time, so the version directories come out as <code>0001-bd9f77c8</code> and <code>0002-73d375ad</code> on your machine too — the same ones quoted above.</p>
+      <p>The zips are stamped with a pinned build time, so the version directories come out as <code>0001-7fc98e0e</code> and <code>0002-7f887035</code> on your machine too — the same ones quoted above.</p>
     </div>
     <p class="lede">Deeper reading: <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/examples/README.md">how the examples are built</a>, <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/design.md">design notes</a> on why the analysis and diff layers work the way they do, and <a href="https://github.com/utkarsh5026/lambwatch/blob/main/docs/autostart.md">autostart recipes</a> for launchd, systemd and Task Scheduler.</p>
   </section>
