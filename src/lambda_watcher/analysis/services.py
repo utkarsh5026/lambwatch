@@ -38,17 +38,37 @@ _ALIASES = {
 
 @dataclass
 class ServiceRef:
+    """One place in the code where an AWS service is used.
+
+    Recorded per ``(service, file)`` rather than per line — the first mention in
+    a file is enough to say the file talks to DynamoDB.
+    """
+
     service: str
     path: str
     line: int
 
     def as_dict(self) -> dict:
+        """This reference as plain JSON-ready data, for the manifest."""
         return {"service": self.service, "path": self.path, "line": self.line}
 
 
 def detect_services(
     root: Path, inventory: Inventory, max_files: int = 2000
 ) -> list[ServiceRef]:
+    """Find which AWS services the code calls, across SDK dialects.
+
+    Recognises the shapes each SDK uses to name a service: ``boto3.client("s3")``
+    in Python, the ``@aws-sdk/client-dynamodb`` import and ``new AWS.S3(`` in
+    JavaScript, and the ``com.amazonaws.services.*`` and
+    ``software.amazon.awssdk.services.*`` package paths in Java. The captured
+    name is lowercased and mapped through ``_ALIASES`` so the spellings converge
+    — ``sfn`` and ``states`` both become ``stepfunctions``.
+
+    Only first-party code is scanned, and only the first hit per
+    ``(service, file)`` is kept, so vendoring the AWS SDK does not make a
+    function look like it calls every service Amazon sells.
+    """
     refs: list[ServiceRef] = []
     seen: set[tuple[str, str]] = set()
     scanned = 0

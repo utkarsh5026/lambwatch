@@ -40,6 +40,23 @@ from .utils import (
 
 @dataclass
 class IngestResult:
+    """The outcome of one ingest, and everything the caller wants to report.
+
+    ``status`` is the important field, and the three non-failure values are
+    genuinely different answers:
+
+    ``new``
+        The tree differed from the latest version, so a version was created.
+    ``unchanged``
+        A different zip whose extracted tree hashes the same. Nothing archived —
+        this is what a rebuild of identical source produces.
+    ``duplicate-download``
+        Byte-for-byte the same zip we have already handled. Never even opened.
+
+    The ``change_*`` fields and ``report_path`` are filled in for ``new`` only,
+    and are what the notification and the console line are written from.
+    """
+
     status: str  # new | unchanged | duplicate-download | failed | skipped
     source: Path
     function_name: str | None = None
@@ -58,6 +75,11 @@ class IngestResult:
 
     @property
     def ok(self) -> bool:
+        """True when the ingest reached a conclusion rather than falling over.
+
+        ``unchanged`` and ``duplicate-download`` count as fine: nothing was
+        archived, but nothing went wrong either.
+        """
         return self.status in {"new", "unchanged", "duplicate-download"}
 
 
@@ -120,6 +142,11 @@ class Ingestor:
     """Runs the pipeline. Safe to call repeatedly from a single thread."""
 
     def __init__(self, cfg: Config, db: Database, store: Store | None = None) -> None:
+        """Bind the pipeline to a config, an index and (optionally) a store.
+
+        The store is constructed from ``cfg`` when not supplied, which also creates
+        the archive directories.
+        """
         self.cfg = cfg
         self.db = db
         self.store = store or Store(cfg)
@@ -352,6 +379,19 @@ class Ingestor:
 
     # -- internals -------------------------------------------------------
     def _index_version(self, **kw) -> int:
+        """Write a finished version and all its analysis rows into the index.
+
+        The whole insert runs in one transaction, so a version is either fully
+        indexed or not there at all — a half-written version would survive as a row
+        with no files and quietly corrupt every later diff.
+
+        This is the write half of a pair: :func:`reindex._insert` builds the same
+        rows from the manifest on disk, and the two must agree exactly. Adding an
+        analysis facet means changing both.
+
+        Takes ``**kw`` because the caller has a dozen values in hand by this point
+        and threading them through as positional parameters was worse.
+        """
         analysis = kw["analysis"]
         with self.db.transaction():
             version_id = self.db.insert_version(
@@ -449,6 +489,17 @@ class Ingestor:
     def _mirror_to_git(
         self, slug: str, code_dir: Path, seq: int, name: str, now: str, tree_hash: str, source: str
     ) -> None:
+        """Commit this version to the function's git mirror, if one is wanted.
+
+        Returns quietly when the mirror is disabled or git is not installed — it is
+        an optional convenience, not part of the archive. Failures are logged and
+        swallowed for the same reason: the version is already on disk and in the
+        index by the time this runs, and a git problem must not turn a successful
+        ingest into a failed one.
+
+        The commit message carries the source filename, tree hash and ingest time,
+        so ``git log`` alone explains where each commit came from.
+        """
         if not self.cfg.git_mirror.enabled:
             return
         if not git_available():

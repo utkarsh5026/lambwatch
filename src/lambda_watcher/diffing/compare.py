@@ -37,6 +37,7 @@ class FileRecord:
 
     @classmethod
     def from_row(cls, row: Any) -> FileRecord:
+        """Build a record from an index row, filling in defaults for null columns."""
         return cls(
             path=row["path"], size=int(row["size"]), sha256=row["sha256"],
             is_text=bool(row["is_text"]), is_vendor=bool(row["is_vendor"]),
@@ -46,6 +47,17 @@ class FileRecord:
 
 @dataclass
 class FileChange:
+    """One file's fate between two versions.
+
+    ``kind`` covers the five things that can happen to a file: ``added``,
+    ``removed``, ``modified``, ``renamed`` and ``mode-changed``. For a rename,
+    ``path`` is where the file ended up and ``old_path`` where it came from.
+
+    ``diff_lines`` may be empty even for a real modification —
+    ``skipped_reason`` then says why (binary, too large, ignored by config), so
+    the renderer can explain the absence rather than imply nothing changed.
+    """
+
     kind: str  # added | removed | modified | renamed | mode-changed
     path: str
     old_path: str | None = None
@@ -60,19 +72,27 @@ class FileChange:
 
     @property
     def is_vendor(self) -> bool:
+        """True when this file is a vendored dependency rather than first-party code.
+
+        Taken from whichever side of the change exists, since a removed file has no
+        new record and vice versa.
+        """
         record = self.new or self.old
         return bool(record and record.is_vendor)
 
     @property
     def size_delta(self) -> int:
+        """Bytes gained or lost. Negative when the file shrank; a full size for an add."""
         return (self.new.size if self.new else 0) - (self.old.size if self.old else 0)
 
     @property
     def lang(self) -> str:
+        """The file's language label, from whichever side of the change exists."""
         record = self.new or self.old
         return record.lang if record else "text"
 
     def as_dict(self) -> dict:
+        """This change as plain JSON-ready data, for the machine-readable diff."""
         return {
             "kind": self.kind,
             "path": self.path,
@@ -88,6 +108,14 @@ class FileChange:
 
 @dataclass
 class DepChange:
+    """One dependency that appeared, disappeared or moved version.
+
+    ``is_declared`` carries through from the dependency itself: a change to a
+    declared range (``boto3>=1.34``) is a change of intent, while a change to an
+    installed version (``boto3 1.34.0`` -> ``1.35.20``) is what actually
+    shipped.
+    """
+
     kind: str  # added | removed | changed
     manager: str
     name: str
@@ -96,6 +124,7 @@ class DepChange:
     is_declared: bool = False
 
     def as_dict(self) -> dict:
+        """This change as plain JSON-ready data, for the machine-readable diff."""
         return {
             "kind": self.kind, "manager": self.manager, "name": self.name,
             "old_version": self.old_version, "new_version": self.new_version,
@@ -105,6 +134,14 @@ class DepChange:
 
 @dataclass
 class VersionDiff:
+    """The complete comparison of two versions, in layers.
+
+    Assembled roughly in the order a reader wants it: what the package now is
+    (runtime, handler), what it depends on, what it needs from its environment,
+    what the scanner noticed, and only last the per-file line diffs. The summary
+    helpers below collapse this into one or two lines for a notification.
+    """
+
     function_name: str
     a_seq: int
     b_seq: int
@@ -137,6 +174,11 @@ class VersionDiff:
 
     # -- summary helpers -------------------------------------------------
     def counts(self) -> dict[str, int]:
+        """How many files fall into each kind of change.
+
+        Always contains all five keys, zeros included, so a caller can index it
+        without guarding.
+        """
         counts = {"added": 0, "removed": 0, "modified": 0, "renamed": 0, "mode-changed": 0}
         for change in self.files:
             counts[change.kind] = counts.get(change.kind, 0) + 1
@@ -144,14 +186,22 @@ class VersionDiff:
 
     @property
     def total_added_lines(self) -> int:
+        """Lines added across every file diff. Zero when diffs were not computed."""
         return sum(c.added_lines for c in self.files)
 
     @property
     def total_removed_lines(self) -> int:
+        """Lines removed across every file diff. Zero when diffs were not computed."""
         return sum(c.removed_lines for c in self.files)
 
     @property
     def is_empty(self) -> bool:
+        """True when nothing at all changed between the two versions.
+
+        Checks every layer, not just the files: a version whose only change is a
+        dependency bump or a new environment variable is not empty. Vendored churn
+        counts too, even when it is hidden from the file list.
+        """
         return not (
             self.files or self.deps or self.env_added or self.env_removed
             or self.services_added or self.services_removed or self.runtime_change
@@ -159,6 +209,12 @@ class VersionDiff:
         )
 
     def headline(self) -> str:
+        """How much changed, in one phrase: ``2 modified, 1 added, 52 vendored``.
+
+        Only non-zero kinds appear, so the line stays short. Falls back to
+        ``no file changes`` — which is a real outcome, not an error, when a
+        dependency or an env var moved but no first-party file did.
+        """
         counts = self.counts()
         parts = [f"{counts[k]} {k}" for k in ("added", "removed", "modified", "renamed") if counts[k]]
         if self.vendor_files_changed:
@@ -196,6 +252,7 @@ class VersionDiff:
         return f"{self.headline()} · {impact}" if impact else self.headline()
 
     def as_dict(self) -> dict:
+        """The whole diff as plain JSON-ready data, for ``--json`` output."""
         return {
             "function": self.function_name,
             "from": self.a_seq,
@@ -215,6 +272,7 @@ class VersionDiff:
 
 
 def _index(records: Iterable[FileRecord]) -> dict[str, FileRecord]:
+    """Turn file records into a ``{path: record}`` lookup."""
     return {r.path: r for r in records}
 
 # Pairing every candidate against every other is quadratic, so cap the work.
@@ -231,7 +289,28 @@ def _similarity_renames(
     new_root: Path,
     cfg: DiffConfig,
 ) -> dict[str, str]:
-    """Pair up added/removed files that look like the same file, moved and edited."""
+    """Pair added and removed files that look like the same file, moved and edited.
+
+    Identical content under a new path is caught earlier by hashing. This is the
+    harder case: a file that was both moved *and* changed, which would otherwise
+    read as an unrelated deletion plus an unrelated addition and lose the thread
+    entirely.
+
+    Candidates are compared with :class:`difflib.SequenceMatcher` and paired
+    above a similarity threshold, with a matching basename treated as
+    corroboration for a plain move. Pairing is greedy — strongest ratio first,
+    each file used once — which is cheaper than an optimal assignment and, at
+    these sizes, indistinguishable from it.
+
+    Comparing every added file against every removed one is quadratic, so the
+    whole step is abandoned when either side has more than
+    :data:`_MAX_RENAME_CANDIDATES` files. Two safeguards make the common case
+    cheap first: files of different languages or wildly different sizes are
+    rejected before anything is read, and file contents are cached so each file
+    is read at most once.
+
+    Returns ``{new path: old path}``, empty when nothing pairs up.
+    """
     if not added or not removed:
         return {}
     if len(added) > _MAX_RENAME_CANDIDATES or len(removed) > _MAX_RENAME_CANDIDATES:
@@ -241,6 +320,11 @@ def _similarity_renames(
     cache: dict[tuple[str, str], list[str] | None] = {}
 
     def lines_of(root: Path, record: FileRecord, side: str) -> list[str] | None:
+        """The file's lines, or None when it is binary or too large to compare.
+
+        Cached per side, so a file considered against several candidates is read
+        once rather than once per pairing.
+        """
         key = (side, record.path)
         if key not in cache:
             if not record.is_text or record.size > max_bytes:
@@ -333,7 +417,19 @@ def _unified_diff(
 
 
 def _diff_deps(old_rows: list[Any], new_rows: list[Any]) -> list[DepChange]:
+    """Compare two dependency lists into added, changed and removed entries.
+
+    Dependencies are matched on ``(manager, name, is_declared)``, so a package
+    that is both declared in ``requirements.txt`` and installed in
+    ``site-packages`` is tracked as two separate facts — which is the point, as
+    the declared range and the installed version can disagree.
+
+    They are then collapsed for display: when both rows tell the same story, the
+    installed one is kept, because that is the version that actually ran.
+    Results are sorted added, then changed, then removed.
+    """
     def key(row: Any) -> tuple[str, str, int]:
+        """Match dependencies across versions, ignoring the version itself."""
         return (row["manager"], row["name"].lower(), int(row["is_declared"]))
 
     old_map = {key(r): r for r in old_rows}
@@ -378,6 +474,12 @@ def _diff_deps(old_rows: list[Any], new_rows: list[Any]) -> list[DepChange]:
 
 
 def _finding_key(row: Any) -> tuple:
+    """Identity of a finding across versions: its kind, file and redacted value.
+
+    Deliberately excludes the line number, so inserting a line above a hardcoded
+    key does not report the old secret as fixed and an identical new one as
+    found.
+    """
     return (row["kind"], row["path"], row["detail"])
 
 

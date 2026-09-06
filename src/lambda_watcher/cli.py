@@ -37,15 +37,19 @@ from .service import (
 from .store import Store
 from .utils import format_ts, human_size, relative_ts, rmtree, setup_logging, slugify
 
-# Commands open the index freely and the process normally exits straight
-# after, so nothing closed it. Windows disagrees: an open SQLite handle makes
-# the file undeletable, so `reindex` (which replaces index.db) fails whenever
-# another command ran first in the same process. Closing on command completion
-# keeps that deterministic instead of waiting for the garbage collector.
+#: Index connections opened by the running command; see `_close_open_dbs`.
 _OPEN_DBS: list[Database] = []
 
 
 def _close_open_dbs(*_args: object, **_kwargs: object) -> None:
+    """Close every index connection opened during this command.
+
+    Registered as Typer's result callback. Normally the process exits straight
+    after a command and nothing needs closing, but Windows keeps an open SQLite
+    handle from being deleted, so ``reindex`` — which replaces ``index.db`` —
+    fails whenever another command ran first in the same process. Closing here
+    makes that deterministic rather than dependent on the garbage collector.
+    """
     while _OPEN_DBS:
         _OPEN_DBS.pop().close()
 
@@ -86,12 +90,22 @@ def _cfg() -> Config:
 
 
 def _open_db(cfg: Config) -> Database:
+    """Open the index and register it to be closed when the command finishes.
+
+    Use this rather than constructing :class:`Database` directly; see
+    :func:`_close_open_dbs`.
+    """
     db = Database(cfg.db_path)
     _OPEN_DBS.append(db)
     return db
 
 
 def _fail(message: str, code: int = 1) -> NoReturn:
+    """Print an error and exit with ``code``.
+
+    Every message passed here should end with something the reader can type. A
+    message that only reports a state leaves them where they started.
+    """
     err_console.print(f"[red]error:[/red] {message}")
     raise typer.Exit(code)
 
@@ -117,6 +131,12 @@ def _complete_function(incomplete: str) -> list[str]:
 
 
 def _resolve_function(db: Database, ident: str):
+    """Look up a function by name, slug or prefix, or exit naming the ones that exist.
+
+    The failure is the useful part: a mistyped name lists the known functions,
+    and an empty archive says so plainly instead of pretending the name was
+    wrong.
+    """
     row = db.get_function(ident)
     if row is None:
         names = [r["name"] for r in db.list_functions()]
@@ -158,6 +178,7 @@ def _resolve_seq(db: Database, function_id: int, spec: str | int | None, default
 
 
 def _version_or_fail(db: Database, function_id: int, seq: int):
+    """Fetch one version by sequence number, or exit saying it does not exist."""
     row = db.get_version(function_id, seq)
     if row is None:
         _fail(f"version {seq} not found")
@@ -166,6 +187,13 @@ def _version_or_fail(db: Database, function_id: int, seq: int):
 
 def _build_diff(db: Database, store: Store, cfg: Config, function_row, a_seq: int, b_seq: int,
                 include_vendor: bool | None, compute_diffs: bool = True):
+    """Resolve two versions and build the diff between them.
+
+    Warns, rather than fails, when a version's extracted code is missing from
+    disk: the index still knows what changed at the file level, so the summary
+    and dependency layers are worth printing even though the line diffs come out
+    empty. Deleting an archive directory by hand is the usual cause.
+    """
     a = _version_or_fail(db, function_row["id"], a_seq)
     b = _version_or_fail(db, function_row["id"], b_seq)
     for row, seq in ((a, a_seq), (b, b_seq)):
@@ -180,6 +208,12 @@ def _build_diff(db: Database, store: Store, cfg: Config, function_row, a_seq: in
 
 
 def _open_path(path: Path) -> None:
+    """Open a file or folder in whatever the desktop uses for it.
+
+    ``open`` on macOS, ``startfile`` on Windows, ``xdg-open`` elsewhere. A
+    failure is a warning, not an error — the path has already been printed, and
+    the reader can open it themselves.
+    """
     try:
         if sys.platform == "darwin":
             subprocess.run(["open", str(path)], check=False)
@@ -234,6 +268,12 @@ def _resolve_editor(cfg: Config, override: str | None) -> list[str]:
 
 
 def _launch_editor(argv: list[str], target: Path, reuse: bool) -> None:
+    """Run the editor on ``target``, waiting for it to exit.
+
+    ``--reuse`` becomes ``-r`` for the VS Code family and is refused out loud for
+    the editors that have no equivalent, rather than being dropped silently or
+    passed through as an argument they would misread.
+    """
     name = Path(argv[0]).stem
     if reuse:
         if name in _REUSE_SUPPORTED:
@@ -250,6 +290,10 @@ def _launch_editor(argv: list[str], target: Path, reuse: bool) -> None:
 
 
 def _version_callback(value: bool) -> None:
+    """Print the version and exit, for ``--version``.
+
+    Eager, so it answers before any other option is processed.
+    """
     if value:
         console.print(f"lambda-watcher {__version__}")
         raise typer.Exit()
@@ -266,6 +310,13 @@ def _main(
         callback=_version_callback, is_eager=True,
     ),
 ) -> None:
+    """Root callback: remember ``--config`` and, with no subcommand, show the status.
+
+    Bare ``lw`` printing a dashboard rather than ``--help`` is deliberate.
+    Someone who has just installed the tool learns more from *is it running and
+    what has it caught* than from a list of twenty commands, and ``--help`` is
+    still one flag away.
+    """
     global _CONFIG_PATH
     _CONFIG_PATH = config
     if ctx.invoked_subcommand is None:
@@ -600,6 +651,7 @@ def watch(
     ingestor = Ingestor(cfg, db)
 
     def report(result) -> None:
+        """Print one line per ingest as the watcher runs, colour-coded by outcome."""
         colours = {
             "new": "green", "unchanged": "cyan", "duplicate-download": "dim", "failed": "red",
         }
@@ -1416,6 +1468,11 @@ def reindex(
 
 
 def main() -> None:
+    """Console-script entry point: run the app, exiting 130 on Ctrl-C.
+
+    Catching :class:`KeyboardInterrupt` here is what keeps a deliberate Ctrl-C
+    out of ``lw watch`` from printing a traceback.
+    """
     try:
         app()
     except KeyboardInterrupt:  # pragma: no cover

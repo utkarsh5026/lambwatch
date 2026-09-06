@@ -32,6 +32,14 @@ except ModuleNotFoundError:  # pragma: no cover
 
 @dataclass(frozen=True)
 class Dependency:
+    """One dependency, either declared in a manifest or installed in the zip.
+
+    ``is_declared`` is the important flag. A declared entry came from
+    ``requirements.txt`` and may be a range (``boto3>=1.34``); an installed
+    entry came from ``site-packages`` and is an exact version that really
+    shipped (``boto3 1.34.0``). Frozen so it can go in a set.
+    """
+
     manager: str      # pip | npm | go | maven | gem
     name: str
     version: str | None
@@ -39,9 +47,16 @@ class Dependency:
     is_declared: bool  # False => vendored/installed
 
     def key(self) -> tuple[str, str]:
+        """Identity across versions: ``(manager, lowercased name)``.
+
+        Deliberately excludes the version, because this is what a diff groups on to
+        notice that ``boto3`` went from 1.34.0 to 1.35.20 rather than reporting one
+        package removed and a different one added.
+        """
         return (self.manager, self.name.lower())
 
     def as_dict(self) -> dict:
+        """This dependency as plain JSON-ready data, for the manifest."""
         return {
             "manager": self.manager,
             "name": self.name,
@@ -58,6 +73,16 @@ _REQ_LINE = re.compile(
 
 
 def _parse_requirements(text: str, source: str) -> list[Dependency]:
+    """Parse a ``requirements.txt`` into declared pip dependencies.
+
+    Handles the ordinary ``boto3==1.34.0`` form plus extras (``requests[security]``),
+    direct URLs and ``git+`` references (the trailing path segment becomes the
+    name), and PEP 508 ``name @ url`` entries. Comments and the flag lines that
+    start with ``-`` (``-r base.txt``, ``-e .``, ``--index-url``) are skipped.
+
+    A bare ``boto3`` with no comparison operator records a None version — the
+    file asked for the package but not for any particular release.
+    """
     deps: list[Dependency] = []
     for raw in text.splitlines():
         line = raw.split("#", 1)[0].strip()
@@ -80,6 +105,16 @@ def _parse_requirements(text: str, source: str) -> list[Dependency]:
 
 
 def _parse_pyproject(text: str, source: str) -> list[Dependency]:
+    """Parse a ``pyproject.toml`` into declared pip dependencies.
+
+    Reads both the standard ``[project] dependencies`` list and Poetry's
+    ``[tool.poetry.dependencies]`` table, whose values may be a bare version
+    string or a table with a ``version`` key. Poetry's ``python`` entry is
+    dropped: it constrains the interpreter, not the package set.
+
+    Returns nothing if TOML cannot be parsed — on Python 3.10 ``tomli`` may be
+    absent, and a malformed file is not worth failing an ingest over.
+    """
     if tomllib is None:
         return []
     try:
@@ -108,6 +143,15 @@ def _parse_pyproject(text: str, source: str) -> list[Dependency]:
 
 
 def _parse_package_json(text: str, source: str, declared: bool = True) -> list[Dependency]:
+    """Parse a ``package.json``, either as a manifest or as an installed package.
+
+    The same filename means two different things depending on where it sits.
+    At the package root it is a manifest, and ``declared=True`` reads the
+    ``dependencies``/``devDependencies``/``optionalDependencies`` tables, whose
+    values are ranges like ``^4.17.21``. Inside ``node_modules/<pkg>/`` it
+    describes one installed package, and ``declared=False`` takes the file's own
+    ``name`` and ``version`` — the exact release that shipped.
+    """
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
@@ -129,6 +173,13 @@ def _parse_package_json(text: str, source: str, declared: bool = True) -> list[D
 
 
 def _parse_package_lock(text: str, source: str) -> list[Dependency]:
+    """Parse a ``package-lock.json`` into installed npm dependencies.
+
+    Supports both lockfile layouts: v2/v3 keep a flat ``packages`` map keyed by
+    path, where the name has to be recovered from the key when the entry omits
+    it, while v1 keeps a ``dependencies`` map keyed by name. Both give resolved
+    versions, so entries are recorded as installed rather than declared.
+    """
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
@@ -154,6 +205,12 @@ _YARN_ENTRY = re.compile(r'^"?([^@\s"][^@\s"]*)@[^\n:]*:\s*$\n(?:.*\n)*?\s+versi
 
 
 def _parse_yarn_lock(text: str, source: str) -> list[Dependency]:
+    """Parse a ``yarn.lock`` into installed npm dependencies.
+
+    Yarn's format is not JSON, so this matches each ``name@range:`` header
+    against the indented ``version "1.2.3"`` line that follows it and takes the
+    resolved version.
+    """
     deps: list[Dependency] = []
     for match in _YARN_ENTRY.finditer(text):
         deps.append(Dependency("npm", match.group(1), match.group(2), source, False))
@@ -165,6 +222,11 @@ _GO_REQUIRE_LINE = re.compile(r"^\s*([^\s/]+\S*)\s+(v\S+)", re.MULTILINE)
 
 
 def _parse_go_mod(text: str, source: str) -> list[Dependency]:
+    """Parse a ``go.mod`` into declared Go dependencies.
+
+    Covers both spellings: the grouped ``require ( ... )`` block and the
+    single-line ``require example.com/mod v1.2.3`` form.
+    """
     deps: list[Dependency] = []
     for block in _GO_REQUIRE_BLOCK.findall(text):
         for name, version in _GO_REQUIRE_LINE.findall(block):
@@ -179,6 +241,16 @@ def _parse_go_mod(text: str, source: str) -> list[Dependency]:
 
 
 def _parse_pom(text: str, source: str) -> list[Dependency]:
+    """Parse a Maven ``pom.xml`` into declared Java dependencies.
+
+    Each ``<dependency>`` becomes one entry named ``groupId:artifactId``, the
+    coordinate Maven itself uses. A ``<version>`` that is a property reference
+    (``${aws.sdk.version}``) is recorded verbatim, since resolving it would mean
+    evaluating the build.
+
+    Regex rather than an XML parser because this only needs the common shape and
+    must not fail an ingest over an unusual document.
+    """
     deps: list[Dependency] = []
     for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.DOTALL):
         group = re.search(r"<groupId>(.*?)</groupId>", block, re.DOTALL)
@@ -196,6 +268,11 @@ _GEMFILE_LOCK = re.compile(r"^\s{4}([a-zA-Z0-9_-]+)\s+\(([^)]+)\)", re.MULTILINE
 
 
 def _parse_gemfile_lock(text: str, source: str) -> list[Dependency]:
+    """Parse a ``Gemfile.lock`` into installed Ruby gems.
+
+    The four-space-indented ``name (1.2.3)`` lines under ``specs:`` are the
+    resolved versions, which is why these are recorded as installed.
+    """
     return [
         Dependency("gem", name, version, source, False)
         for name, version in _GEMFILE_LOCK.findall(text)

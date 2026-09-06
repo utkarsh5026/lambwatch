@@ -31,16 +31,30 @@ _PREFERRED = (
 
 @dataclass
 class HandlerCandidate:
+    """One possible Lambda entry point, with a score saying how likely it is.
+
+    ``handler`` is the string you would actually paste into the AWS console —
+    ``lambda_function.lambda_handler`` — assembled from the file's module path
+    and the function's name.
+    """
+
     path: str
     symbol: str
     handler: str  # "module.function", the value you paste into the console
     score: int
 
     def as_dict(self) -> dict:
+        """This candidate as plain JSON-ready data, for the manifest."""
         return {"path": self.path, "symbol": self.symbol, "handler": self.handler, "score": self.score}
 
 
 def _module_name(path: str) -> str:
+    """Turn a file path into the dotted module path AWS expects.
+
+    ``src/app/handler.py`` -> ``src.app.handler``. The extension is dropped and
+    every directory separator becomes a dot, which is the form the handler
+    setting takes.
+    """
     pure = PurePosixPath(path)
     stem = pure.stem
     parts = list(pure.parts[:-1]) + [stem]

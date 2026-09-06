@@ -52,8 +52,19 @@ def notify(title: str, message: str, enabled: bool = True) -> bool:
 
 
 def _applescript_quote(value: str) -> str:
+    """Quote a string for embedding in AppleScript, escaping backslashes then quotes.
+
+    The notification text is a function name that came out of a downloaded
+    filename, so it is not trusted input — quoting it is what keeps a stray
+    quote character from turning into script.
+    """
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _ps_quote(value: str) -> str:
+    """Quote a string for a PowerShell single-quoted literal, doubling any quote.
+
+    PowerShell single-quoted strings interpolate nothing, so doubling ``'`` is
+    the only escape needed. Same reasoning as :func:`_applescript_quote`.
+    """
     return "'" + value.replace("'", "''") + "'"

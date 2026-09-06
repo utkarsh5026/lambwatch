@@ -39,18 +39,43 @@ _SCANNABLE = {"python", "javascript", "typescript", "java", "ruby", "csharp", "g
 
 @dataclass
 class EnvVarRef:
+    """One place in the code where an environment variable is read.
+
+    The same variable read from three files is three refs; collapse them with
+    :meth:`~lambda_watcher.analysis.Analysis.unique_env_vars` when you want the
+    set of names rather than the call sites.
+    """
+
     name: str
     path: str
     line: int
     is_reserved: bool = False
 
     def as_dict(self) -> dict:
+        """This reference as plain JSON-ready data, for the manifest."""
         return {"name": self.name, "path": self.path, "line": self.line, "is_reserved": self.is_reserved}
 
 
 def detect_env_vars(
     root: Path, inventory: Inventory, include_vendor: bool = False, max_files: int = 2000
 ) -> list[EnvVarRef]:
+    """Find every environment variable the code reads, across languages.
+
+    Scans each text file line by line for the idioms that read configuration —
+    ``os.environ["X"]`` and ``os.getenv("X")`` in Python, ``process.env.X`` in
+    JavaScript, ``System.getenv("X")`` in Java, and the Ruby and C# equivalents
+    — and records the name, file and line of each hit.
+
+    Vendored dependencies are skipped by default: they read hundreds of
+    variables that have nothing to do with this function. ``max_files`` caps how
+    many files are opened so a package with an enormous tree cannot make an
+    ingest crawl. Results are deduplicated by ``(name, path, line)`` and sorted,
+    so re-analysing an unchanged tree produces an identical list.
+
+    This is textual pattern matching, not parsing: a name built at runtime
+    (``os.environ[prefix + "_URL"]``) is invisible to it, and one inside a
+    comment still counts.
+    """
     refs: list[EnvVarRef] = []
     seen: set[tuple[str, str, int]] = set()
     entries = inventory.files if include_vendor else inventory.code_files

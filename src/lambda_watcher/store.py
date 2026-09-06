@@ -40,31 +40,55 @@ LEGACY_REPO_DIRNAMES = ("git", "repo")
 
 @dataclass
 class VersionPaths:
+    """The three paths that make up one archived version directory.
+
+    A small holder so callers say ``paths.manifest`` rather than rebuilding
+    ``root / "manifest.json"`` in a dozen places and eventually mistyping one.
+    """
+
     root: Path
 
     @property
     def code(self) -> Path:
+        """The extracted tree — the package's files as they shipped."""
         return self.root / "code"
 
     @property
     def manifest(self) -> Path:
+        """``manifest.json``: the full analysis, and the source the index is rebuilt from."""
         return self.root / "manifest.json"
 
     @property
     def package(self) -> Path:
+        """The original download, kept beside the extraction when ``store.keep_zip`` is on."""
         return self.root / "package.zip"
 
 
 class Store:
+    """The archive's directory layout, and the only thing that writes to it.
+
+    Every path under the root is derived here rather than assembled by callers,
+    so the layout drawn in the module docstring stays true. Nothing in this
+    class touches the SQLite index: disk is the source of truth, and the index
+    is rebuilt from what lands here.
+    """
+
     def __init__(self, cfg: Config) -> None:
+        """Bind to a config and create the archive directories if they are missing.
+
+        Creating them up front is what lets every command work with no config file
+        and no setup step.
+        """
         self.cfg = cfg
         cfg.ensure_dirs()
 
     # -- paths -----------------------------------------------------------
     def function_dir(self, slug: str) -> Path:
+        """``functions/<slug>/`` — one function's corner of the archive."""
         return self.cfg.functions_dir / slug
 
     def versions_dir(self, slug: str) -> Path:
+        """``functions/<slug>/versions/`` — where this function's version directories live."""
         return self.function_dir(slug) / "versions"
 
     def repo_dir(self, slug: str) -> Path:
@@ -99,9 +123,16 @@ class Store:
         return repo
 
     def version_dirname(self, seq: int, tree_hash: str) -> str:
+        """The directory name for a version: ``0007-a1b2c3d4``.
+
+        Zero-padded so a plain alphabetical listing is also chronological, and
+        suffixed with eight characters of tree hash so the content identity is
+        visible without opening the manifest.
+        """
         return f"{seq:04d}-{short_hash(tree_hash)}"
 
     def version_paths(self, slug: str, seq: int, tree_hash: str) -> VersionPaths:
+        """The :class:`VersionPaths` for one version of one function."""
         return VersionPaths(self.versions_dir(slug) / self.version_dirname(seq, tree_hash))
 
     def resolve_version_dir(self, stored_dir: str) -> Path:
@@ -110,6 +141,11 @@ class Store:
         return path if path.is_absolute() else self.cfg.root / path
 
     def relative(self, path: Path) -> str:
+        """A path rewritten relative to the archive root, for storing and display.
+
+        Falls back to the absolute path when it lies outside the root, which is
+        better than raising in the middle of writing a manifest.
+        """
         try:
             return str(path.relative_to(self.cfg.root))
         except ValueError:
@@ -124,10 +160,20 @@ class Store:
         return staging
 
     def clear_staging(self) -> None:
+        """Delete the whole staging area.
+
+        Called at startup to clear scratch directories left behind by an ingest that
+        was interrupted part-way.
+        """
         rmtree(self.cfg.root / ".staging")
 
     # -- manifests -------------------------------------------------------
     def write_manifest(self, paths: VersionPaths, manifest: dict[str, Any]) -> None:
+        """Write ``manifest.json`` for a version, pretty-printed and UTF-8.
+
+        Indented and with key order preserved because this file is meant to be read
+        by people and diffed by git, not just parsed.
+        """
         paths.manifest.parent.mkdir(parents=True, exist_ok=True)
         paths.manifest.write_text(
             json.dumps(manifest, indent=2, sort_keys=False, ensure_ascii=False),
@@ -135,6 +181,11 @@ class Store:
         )
 
     def read_manifest(self, version_dir: Path) -> dict[str, Any] | None:
+        """Read a version's ``manifest.json``, or None if it is missing or unreadable.
+
+        Returns None rather than raising so a single corrupt manifest degrades one
+        version instead of failing a whole reindex.
+        """
         manifest = Path(version_dir) / "manifest.json"
         if not manifest.exists():
             return None

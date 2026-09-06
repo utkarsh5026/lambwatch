@@ -33,6 +33,12 @@ BINARY_LANGS = {"binary"}
 
 
 def sha256_file(path: Path) -> str:
+    """Hash a file's contents, reading it in 1 MiB chunks.
+
+    Chunked rather than ``path.read_bytes()`` because a Lambda zip can be
+    hundreds of megabytes and there is no reason to hold one in memory just to
+    digest it.
+    """
     h = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(_CHUNK), b""):
@@ -41,6 +47,11 @@ def sha256_file(path: Path) -> str:
 
 
 def sha256_bytes(data: bytes) -> str:
+    """Hash a blob already in memory.
+
+    The in-memory twin of :func:`sha256_file`, used for individual zip members
+    that were read during extraction anyway.
+    """
     return hashlib.sha256(data).hexdigest()
 
 
@@ -56,6 +67,12 @@ def tree_hash(entries: list[tuple[str, str]]) -> str:
 
 
 def short_hash(digest: str, length: int = 8) -> str:
+    """First ``length`` characters of a hex digest, for display.
+
+    Version directories are named ``0007-a1b2c3d4`` — the sequence number plus
+    eight characters of tree hash, which is short enough to type and long enough
+    that a collision inside one function's history is not a real worry.
+    """
     return digest[:length]
 
 
@@ -80,6 +97,14 @@ def is_probably_text(path: Path, sniff_bytes: int = 8192) -> bool:
 
 
 def language_for(path: str) -> str:
+    """Guess a language label from a path, for reports and syntax highlighting.
+
+    Extension first (``handler.py`` -> ``python``), then a handful of
+    well-known extensionless names (``Dockerfile`` -> ``dockerfile``), then
+    ``text``. An unrecognised extension becomes itself, so ``notes.rst`` ->
+    ``rst`` rather than a useless ``text``: the highlighter simply has no rules
+    for it and leaves it alone.
+    """
     ext = PurePosixPath(path).suffix.lower()
     if ext:
         return LANG_BY_EXT.get(ext, ext.lstrip("."))
@@ -183,6 +208,12 @@ def matches_any(path: str, patterns: list[str]) -> bool:
 
 
 def human_size(num_bytes: float) -> str:
+    """Bytes as something a person can read: ``1,536`` -> ``1.5 KB``.
+
+    Whole bytes stay whole (``512 B``, not ``512.0 B``); everything larger gets
+    one decimal place. Thousands separators survive into the petabyte fallback,
+    which is where a wrong unit would otherwise hide.
+    """
     step = 1024.0
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(num_bytes) < step:
@@ -229,14 +260,32 @@ def rename_label(old: str, new: str) -> tuple[str, str, str, str]:
 
 
 def signed(num: int) -> str:
+    """An integer with its sign always shown: ``3`` -> ``+3``, ``-2`` -> ``-2``.
+
+    Diff summaries read as deltas, and a bare ``3`` next to a bare ``-2`` makes
+    the reader work out which column they are in. Zero stays ``0``, since
+    ``+0`` claims a change that did not happen.
+    """
     return f"+{num}" if num > 0 else str(num)
 
 
 def utc_now_iso() -> str:
+    """The current UTC time as an ISO-8601 string, to the second.
+
+    Everything written to a manifest or the index is stamped with this. Seconds
+    are enough resolution for a human-scale event like a download, and dropping
+    microseconds keeps stored timestamps comparable as plain strings.
+    """
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp, returning None instead of raising.
+
+    Timestamps come out of manifests and the index, both of which can be
+    hand-edited or written by an older version of the tool. A display helper
+    should render ``-`` for a stamp it cannot read, not crash the command.
+    """
     if not value:
         return None
     try:
@@ -246,6 +295,12 @@ def parse_iso(value: str | None) -> datetime | None:
 
 
 def format_ts(value: str | None) -> str:
+    """An ISO timestamp as ``2026-09-06 14:30`` in the reader's local zone.
+
+    Stored times are UTC; a person reading a table wants their own clock.
+    Unparseable or missing values render as ``-`` — see :func:`parse_iso`. Use
+    :func:`relative_ts` instead when the distance matters more than the date.
+    """
     dt = parse_iso(value)
     if dt is None:
         return "-"
@@ -291,6 +346,12 @@ def rmtree(path: Path) -> None:
     import stat
 
     def _onerror(func, target, _exc):  # pragma: no cover - platform specific
+        """Retry one failed deletion after clearing the read-only bit.
+
+        Zip members frequently arrive read-only, and on Windows that alone makes
+        ``shutil.rmtree`` fail. If the retry also fails the error is swallowed:
+        this only ever runs on scratch directories the caller is discarding.
+        """
         try:
             os.chmod(target, stat.S_IWRITE)
             func(target)
@@ -302,6 +363,18 @@ def rmtree(path: Path) -> None:
 
 
 def setup_logging(level: str = "INFO", log_file: Path | None = None) -> logging.Logger:
+    """Point the shared ``lambda_watcher`` logger at a level and optional file.
+
+    Replaces any handlers already installed, so calling it twice is safe, and
+    turns off propagation so records never reach the root logger and get echoed
+    a second time onto the console the CLI is drawing tables on. With no
+    ``log_file`` the logger keeps no handler at all, which is what the
+    foreground commands want; the background service passes a path so there is
+    somewhere to look when it misbehaves unattended.
+
+    An unrecognised ``level`` falls back to ``INFO`` rather than raising — a
+    typo in the config file should not stop the watcher starting.
+    """
     LOG.setLevel(getattr(logging, str(level).upper(), logging.INFO))
     LOG.handlers.clear()
     LOG.propagate = False
