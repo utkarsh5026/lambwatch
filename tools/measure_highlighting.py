@@ -65,6 +65,13 @@ def bucket(cls: str) -> str:
 
 
 def ours_line(line: str, lang: str) -> list[str]:
+    """Per-character classes for one line, lexed with no knowledge of the lines above.
+
+    This is the *old* path, kept only so the report can show what it scored. It is
+    what the highlighter used to do, and it gets a line inside a block comment or a
+    triple-quoted string wrong every time, because from one row you cannot tell
+    that the construct ever opened. The `before` column is this.
+    """
     classes = [""] * len(line)
     grammar = GRAMMARS.get(FAMILY_BY_LANG.get(lang, ""))
     if grammar:
@@ -87,6 +94,11 @@ def ours_file(text: str, lang: str) -> list[list[str]]:
 
 
 def theirs(text: str, lexer) -> list[str]:
+    """Per-character classes from Pygments, collapsed to comment/string/code.
+
+    The oracle. Only these three classes are scored, because they are the only
+    ones where both lexers certainly mean the same thing.
+    """
     classes = [""] * len(text)
     for pos, token, value in lexer.get_tokens_unprocessed(text):
         cls = "c" if token in Comment else "s" if token in String else ""
@@ -96,7 +108,9 @@ def theirs(text: str, lexer) -> list[str]:
 
 
 def row(label: str, seen: collections.Counter[str]) -> str:
+    """One formatted table row: the counts, then agreement before and after."""
     def pct(key: str, over: str) -> float:
+        """``key`` as a percentage of ``over``, treating a zero denominator as one."""
         return 100 * seen[key] / (seen[over] or 1)
 
     return (f"{label:<11}{seen['files']:>6}{seen['lines']:>7}{seen['chars']:>9} │ "
@@ -105,6 +119,17 @@ def row(label: str, seen: collections.Counter[str]) -> str:
 
 
 def corpus(root: str, ext: str) -> list[Path]:
+    """Shuffled list of files with the given extension under ``root``.
+
+    Shelling out to `find` rather than walking in Python: this runs over ``/`` by
+    default, where a `rglob` spends most of its time raising `PermissionError`.
+    `/proc` and `/sys` are dropped because their contents are not files in any
+    sense that matters here, and the size cap keeps a stray minified bundle from
+    dominating the character counts.
+
+    Shuffled so a capped sample is spread across the tree instead of being
+    whatever the first directory happened to hold.
+    """
     found = subprocess.run(
         ["find", root, "-name", f"*.{ext}", "-type", "f", "-size", "-120k"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False,
@@ -115,6 +140,7 @@ def corpus(root: str, ext: str) -> list[Path]:
 
 
 def main() -> int:
+    """Lex the corpus both ways, print per-language agreement, and return an exit status."""
     root = sys.argv[1] if len(sys.argv) > 1 else "/"
     random.seed(7)
     print(f"{'language':<11}{'files':>6}{'lines':>7}{'chars':>9} │ "

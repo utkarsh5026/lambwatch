@@ -15,6 +15,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -k rename    # by name fragment
 
 ruff check .                            # or .venv/bin/ruff; config lives in pyproject
+python tools/check_docstrings.py        # the other CI lint gate; stdlib only, no venv needed
 ```
 
 Running the CLI during development: `.venv/bin/lambda-watcher <cmd>` (alias `lw`), or
@@ -97,6 +98,11 @@ reverse-engineering it from the implementation. That is a hard requirement on ev
   either way — `Ingestor._index_version` and `reindex._insert` name each other for that reason.
 - **Name things so the docstring has less to do.** A docstring rescuing an unclear name is the
   wrong fix; rename it. Match the surrounding file's comment density and idiom.
+
+[tools/check_docstrings.py](tools/check_docstrings.py) enforces the first bullet and runs in CI
+beside `ruff check`, so this is a gate rather than an aspiration. It is stdlib-only and takes
+paths, so `python tools/check_docstrings.py src/lambda_watcher/db.py` checks one file. `@overload`
+stubs are its only exemption — the docstring belongs on the implementation underneath.
 
 ## Architecture
 

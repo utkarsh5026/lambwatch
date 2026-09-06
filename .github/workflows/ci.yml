@@ -25,7 +25,7 @@ env:
 
 jobs:
   lint:
-    name: ruff
+    name: ruff and docstrings
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +44,12 @@ jobs:
       # that the formatter would collapse.
       - name: ruff check
         run: ruff check --output-format=github .
+
+      # CLAUDE.md asks for a docstring on every function, method, class and
+      # property; this is what keeps that from decaying back into an intention.
+      # Stdlib only, so it needs nothing installed beyond the linter above.
+      - name: Docstring coverage
+        run: python tools/check_docstrings.py --format=github src
 
   test:
     name: py${{ matrix.python }} / ${{ matrix.os }}
