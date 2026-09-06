@@ -940,11 +940,23 @@ def diff(
     open_report: bool = typer.Option(False, "--open", help="Open the HTML report in your browser."),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Where to write the HTML report."),
     vendor: bool = typer.Option(False, "--vendor", help="Include vendored dependency files."),
+    whitespace: bool = typer.Option(
+        False, "--whitespace", help="Show the hunk for files that changed only in whitespace."
+    ),
     no_patch: bool = typer.Option(False, "--no-patch", help="Summary only, no line diffs."),
     json_out: bool = typer.Option(False, "--json", help="Emit the diff as JSON."),
+    mirror: bool = typer.Option(
+        False, "--mirror", help="Show the git mirror's answer for these two versions instead."
+    ),
 ) -> None:
     """Compare two versions of a function. Defaults to the last two."""
     cfg = _cfg()
+    # A retab renders as every touched line removed and re-added, so the diff
+    # collapses it to a label by default. This is the way back for the one time
+    # the reader wants to check that a reindent is all it was; the override goes
+    # on the config rather than through `compare_versions` because that is where
+    # everything else reads the setting from.
+    cfg.diff.collapse_whitespace_only = not whitespace
     db = _open_db(cfg)
     store = Store(cfg)
     row = _resolve_function(db, function)

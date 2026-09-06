@@ -174,8 +174,29 @@ class DiffConfig:
     max_diff_file_kb: int = 512
     #: Diffs longer than this many lines are truncated in reports.
     max_diff_lines: int = 2000
-    #: Paths never diffed (still tracked for add/remove).
-    ignore_globs: list[str] = field(default_factory=lambda: ["**/*.pyc", "**/*.so", "**/*.map"])
+    #: Paths never diffed (still tracked for add/remove). The lock files are
+    #: here because the dependency layer already tells their story as version
+    #: numbers, and their own diff is thousands of lines of resolved hashes.
+    ignore_globs: list[str] = field(
+        default_factory=lambda: [
+            "**/*.pyc", "**/*.so", "**/*.map",
+            "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
+            "**/poetry.lock", "**/Pipfile.lock", "**/composer.lock",
+            "**/Cargo.lock", "**/go.sum",
+        ]
+    )
+    #: Report a file whose only change is whitespace as ``whitespace only``
+    #: instead of printing the hunk. A reindent renders as every touched line
+    #: removed and re-added, which is a rewrite of the file to say nothing
+    #: happened to it; ``lw diff --whitespace`` prints it anyway for the one
+    #: time you need to check.
+    collapse_whitespace_only: bool = True
+    #: Above this average line length a file is diffed word by word instead of
+    #: line by line. A minified bundle is one 8,000-character line, so a line
+    #: diff quotes the whole file to show a changed digit. Mean, not maximum: a
+    #: single long data literal in an ordinary module still diffs by line. Set
+    #: it very high to always use the line diff.
+    long_line_mean_chars: int = 400
     #: How many file pairs rename detection may score before it stops and says
     #: so. Comparing files that moved *and* changed is quadratic in the number
     #: of candidates, so a restructure of a few thousand files needs a ceiling

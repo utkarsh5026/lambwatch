@@ -471,3 +471,160 @@ def test_a_move_out_of_the_archive_root_is_named(cfg, db, ingestor: Ingestor, ma
     (move,) = diff.moves
     assert move.old_dir == "" and move.display_dirs == (".", "src")
     assert "{. → src}/" in "".join(_rows(diff))
+
+
+# --- Diffs that carry no information ------------------------------------------
+
+TABBED = "def handler(event, context):\n\tif event:\n\t\treturn compute(event)\n\treturn None\n"
+SPACED = "def handler(event, context):\n    if event:\n        return compute(event)\n    return None\n"
+
+
+def _bundle(constant: int, padding: int = 2000) -> str:
+    """A minified bundle: one line, several KB, one digit worth telling apart."""
+    return f"!function(e){{var t={constant};{'a=1;' * padding}}}();\n"
+
+
+def _patch(diff) -> str:
+    """The whole terminal rendering, patches included — what `lw diff` prints."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    from lambda_watcher.diffing.render_text import render as render_diff
+
+    buffer = StringIO()
+    render_diff(Console(file=buffer, width=200, no_color=True), diff)
+    return buffer.getvalue()
+
+
+def test_a_retab_is_labelled_not_reprinted(cfg, db, ingestor: Ingestor, make_zip):
+    """Tabs to spaces changes every line and says nothing. The label is the whole story."""
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": TABBED}))
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": SPACED}))
+
+    diff = _diff(cfg, db, ingestor)
+    (change,) = diff.files
+    assert change.kind == "modified"          # the file really did change on disk
+    assert change.whitespace_only
+    assert change.skipped_reason == "whitespace only"
+    assert not change.diff_lines
+    # +3/-3 was the noise, not the news.
+    assert (change.added_lines, change.removed_lines) == (0, 0)
+    assert diff.lines_uncounted == 1
+    assert "whitespace only" in _patch(diff)
+    assert "return compute(event)" not in _patch(diff)
+
+
+def test_the_whitespace_label_can_be_turned_off(cfg, db, ingestor: Ingestor, make_zip):
+    """``lw diff --whitespace`` is the way back when a reindent might be hiding an edit."""
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": TABBED}))
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": SPACED}))
+
+    cfg.diff.collapse_whitespace_only = False
+    (change,) = _diff(cfg, db, ingestor).files
+    assert not change.whitespace_only
+    assert (change.added_lines, change.removed_lines) == (3, 3)
+
+
+def test_a_real_edit_beside_a_reindent_is_still_shown(cfg, db, ingestor: Ingestor, make_zip):
+    """The test is whole-file: one changed token puts the file back on the line diff."""
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": TABBED}))
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": SPACED.replace("None", "{}")}))
+
+    (change,) = _diff(cfg, db, ingestor).files
+    assert not change.whitespace_only
+    assert any(line.startswith("+    return {}") for line in change.diff_lines)
+
+
+def test_collapsing_whitespace_is_not_deleting_it(cfg, db, ingestor: Ingestor, make_zip):
+    """``foo bar`` -> ``foobar`` is a rename, whatever ``git -w`` would call it."""
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": "x = foo (1)\n"}))
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": "x = foo(1)\n"}))
+
+    (change,) = _diff(cfg, db, ingestor).files
+    assert not change.whitespace_only and change.diff_lines
+
+
+def test_a_minified_bundle_is_diffed_by_word_not_by_line(cfg, db, ingestor: Ingestor, make_zip):
+    """One line, 8 KB, one changed digit: the line diff is the file quoted twice."""
+    ingestor.ingest(make_zip("fn.zip", {"bundle.min.js": _bundle(1)}))
+    ingestor.ingest(make_zip("fn.zip", {"bundle.min.js": _bundle(2)}))
+
+    diff = _diff(cfg, db, ingestor)
+    (change,) = diff.files
+    assert change.long_lines and not change.diff_lines
+    (edit,) = change.word_edits
+    assert (edit.before, edit.after) == ("1", "2")
+    assert edit.lead.endswith("var t=") and edit.trail.startswith(";a=1;")
+
+    printed = _patch(diff)
+    assert "minified — 1 edit" in printed
+    assert "1 not counted by line" in printed
+    # The 8,000 characters that did not change stay out of the terminal.
+    assert "a=1;" * 40 not in printed
+
+
+def test_a_rebuilt_bundle_reports_its_size_rather_than_quoting_itself(
+    cfg, db, ingestor: Ingestor, make_zip
+):
+    """Past a few KB of difference the two bundles were rebuilt, not patched."""
+    ingestor.ingest(make_zip("fn.zip", {"bundle.min.js": _bundle(1)}))
+    ingestor.ingest(make_zip("fn.zip", {"bundle.min.js": "!function(e){" + "z=9;" * 3000 + "}();\n"}))
+
+    (change,) = _diff(cfg, db, ingestor).files
+    assert change.long_lines and not change.word_edits
+    assert change.skipped_reason.startswith("changes span ")
+    assert "z=9;" * 40 not in _patch(_diff(cfg, db, ingestor))
+
+
+def test_an_added_bundle_keeps_the_ordinary_diff(cfg, db, ingestor: Ingestor, make_zip):
+    """Word-level needs two sides. A bundle that merely arrived has one."""
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1, "bundle.min.js": _bundle(1)}))
+
+    (change,) = [c for c in _diff(cfg, db, ingestor).files if c.path == "bundle.min.js"]
+    assert change.kind == "added"
+    assert not change.long_lines and change.diff_lines
+
+
+def test_an_ordinary_module_with_one_long_line_still_diffs_by_line(
+    cfg, db, ingestor: Ingestor, make_zip
+):
+    """The threshold is the mean, so one embedded blob does not disqualify a module."""
+    blob = f"DATA = '{'x' * 3000}'\n"
+    before = blob + "".join(f"v{i} = {i}\n" for i in range(200))
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": before}))
+    ingestor.ingest(make_zip("fn.zip", {"handler.py": before + "EXTRA = 1\n"}))
+
+    (change,) = _diff(cfg, db, ingestor).files
+    assert not change.long_lines
+    assert "+EXTRA = 1" in change.diff_lines
+
+
+def test_lock_files_are_left_to_the_dependency_layer(cfg, db, ingestor: Ingestor, make_zip):
+    """A resolved lock file diffs as thousands of hash lines saying `boto3 moved`."""
+    def lock(version: str) -> str:
+        """One resolved package, integrity hash and all."""
+        return f'{{"packages": {{"a": {{"version": "{version}", "integrity": "sha512-{"q" * 60}"}}}}}}\n'
+    ingestor.ingest(make_zip("fn.zip", {"package-lock.json": lock("1.0.0"), "app.js": "var a=1;\n"}))
+    ingestor.ingest(make_zip("fn.zip", {"package-lock.json": lock("2.0.0"), "app.js": "var a=2;\n"}))
+
+    diff = _diff(cfg, db, ingestor)
+    (locked,) = [c for c in diff.files if c.path == "package-lock.json"]
+    assert locked.kind == "modified"                  # still reported as changed
+    assert locked.skipped_reason == "ignored by config" and not locked.diff_lines
+    (app,) = [c for c in diff.files if c.path == "app.js"]
+    assert app.diff_lines                             # first-party code is untouched by this
+
+
+def test_the_html_report_shows_the_changed_runs(cfg, db, ingestor: Ingestor, make_zip):
+    """Both renderers answer the same question; only the markup differs."""
+    ingestor.ingest(make_zip("fn.zip", {"bundle.min.js": _bundle(1), "handler.py": TABBED}))
+    ingestor.ingest(make_zip("fn.zip", {"bundle.min.js": _bundle(2), "handler.py": SPACED}))
+
+    html = render_html(_diff(cfg, db, ingestor))
+    assert '<div class="wordedit">' in html
+    assert '<span class="was">1</span> → <span class="now">2</span>' in html
+    assert "diffed by word" in html
+    assert "lw diff --whitespace" in html          # every note names the way out
+    assert '<div class="diff">' not in html        # neither file got a line table
