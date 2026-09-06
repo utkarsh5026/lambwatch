@@ -344,6 +344,107 @@ def test_rm_deletes_the_mirror_too(archived: Path):
     assert not (archived / "repos" / "order-processor").exists()
 
 
+# ------------------------------------------- the two engines reconcile (P8)
+# `lw diff` hides vendored files and the mirror keeps them, so the same two
+# versions come back with different file counts. Both defaults are deliberate,
+# so the fix is not to make one match the other but to make each output say the
+# other exists - which is what these tests hold in place.
+@pytest.fixture
+def vendored(home: Path, downloads: Path):
+    """Two versions where a vendored file changed alongside a first-party one.
+
+    The plain ``archived`` fixture has nothing under ``site-packages/``, so it
+    cannot show the divergence at all: with no vendored churn the two engines
+    agree and there is nothing to reconcile.
+    """
+    _run("ingest", str(_zip(downloads, "dual.zip", {
+        "lambda_function.py": PY_V1, "site-packages/boto3/__init__.py": "VERSION = '1.34.0'\n"})))
+    _run("ingest", str(_zip(downloads, "dual-2026-02-01.zip", {
+        "lambda_function.py": PY_V2, "site-packages/boto3/__init__.py": "VERSION = '1.35.20'\n"})))
+    return home
+
+
+def test_the_diff_names_the_flag_that_shows_what_it_hid(vendored: Path):
+    """A tally saying "1 vendored (hidden)" without saying how to see it is half an answer."""
+    output = _run("diff", "dual").output
+    assert "1 vendored (hidden)" in output
+    assert "lw diff dual --vendor" in output
+
+
+def test_the_hint_is_absent_when_nothing_was_hidden(archived: Path):
+    """It has to mean something when it appears, so it must not always appear."""
+    assert "--vendor" not in _run("diff", "order-processor").output
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_the_mirror_says_the_diff_filters_what_it_is_showing(vendored: Path, capfd):
+    result = _run("git", "dual", "diff", "--stat", "v0001", "v0002")
+    assert "lw diff dual" in result.stderr
+    # git writes to the real file descriptor rather than through CliRunner,
+    # which is the whole point of the passthrough - it hands the terminal over,
+    # so the user's pager and colour behave. That also means only a
+    # descriptor-level capture can see it.
+    captured = capfd.readouterr()
+    assert "site-packages/boto3/__init__.py" in captured.out
+    # The note is on stderr and nowhere else: `lw git dual diff > patch` has to
+    # still write a patch.
+    assert "note:" not in captured.out
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_the_mirror_stays_quiet_when_it_is_not_answering_the_same_question(vendored: Path):
+    """`lw git dual log --oneline` is not a diff, so the note would be noise."""
+    assert "lw diff" not in _run("git", "dual", "log", "--oneline").stderr
+
+
+def test_no_note_when_the_two_settings_already_agree(tmp_path: Path):
+    """Turn either policy around and there is no discrepancy left to explain."""
+    from lambda_watcher.cli import _vendor_policy_note
+    from lambda_watcher.config import Config
+
+    config = Config()
+    assert _vendor_policy_note(config, "dual", ["diff"])
+    config.git_mirror.include_vendor = False
+    assert _vendor_policy_note(config, "dual", ["diff"]) is None
+
+
+def test_a_patch_flag_counts_even_on_a_subcommand_that_usually_is_not_one(tmp_path: Path):
+    from lambda_watcher.cli import _vendor_policy_note
+    from lambda_watcher.config import Config
+
+    config = Config()
+    assert _vendor_policy_note(config, "dual", ["log", "--stat"])
+    assert _vendor_policy_note(config, "dual", ["log", "--oneline"]) is None
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_diff_mirror_answers_with_the_files_the_diff_hid(vendored: Path):
+    """The reconciliation from the other direction: git's own patch, same command."""
+    output = _run("diff", "dual", "--mirror").output
+    assert "site-packages/boto3/__init__.py" in output
+    assert "1.35.20" in output
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_diff_mirror_resolves_the_same_version_specs_the_diff_does(vendored: Path):
+    """`--mirror` earns its place over `lw git` by taking `latest` and `-2`."""
+    assert "boto3" in _run("diff", "dual", "--from", "-2", "--to", "latest", "--mirror").output
+
+
+def test_diff_mirror_will_not_pretend_to_be_a_report(vendored: Path):
+    result = runner.invoke(app, ["diff", "dual", "--mirror", "--json"])
+    assert result.exit_code == 1
+    assert "--json" in result.stderr and "Drop --mirror" in result.stderr
+
+
+@pytest.mark.skipif(not git_available(), reason="git is not installed")
+def test_diff_mirror_without_a_mirror_names_the_way_out(vendored: Path):
+    rmtree(vendored / "repos" / "dual")
+    result = runner.invoke(app, ["diff", "dual", "--mirror"])
+    assert result.exit_code == 1
+    assert "lw diff dual" in result.stderr
+
+
 def test_export_round_trips_a_version(archived: Path, tmp_path: Path):
     target = tmp_path / "restored.zip"
     _run("export", "order-processor", "1", "-o", str(target))

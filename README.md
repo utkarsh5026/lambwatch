@@ -59,6 +59,14 @@ lw open order-processor                    # the whole archive, in your editor
 lw git order-processor log -p              # or just use git
 ```
 
+`lw diff` hides vendored dependency files and the git mirror keeps them, so the
+two commands report different totals for the same pair of versions — the demo
+below is *2 added, 2 modified, 9 renamed* from `lw diff` and *68 files changed*
+from `lw git order-processor diff --stat v0001 v0002`. Neither is wrong, so each
+one says the other exists: `lw diff --vendor` shows the hidden files, and
+`lw diff --mirror` prints the mirror's own patch for whichever two versions you
+asked for.
+
 ## Why the diffs are actually readable
 
 A raw `diff -r` between two Lambda zips is unusable: thousands of vendored
@@ -70,6 +78,8 @@ answering the questions you actually have, in order:
 | **Your code, separated from theirs** | `node_modules/`, `site-packages/` and friends are classified as vendored and hidden by default. Three changed files, not 3,000. |
 | **Dependencies as versions, not files** | A `boto3` upgrade shows as `boto3 1.34.0 → 1.35.20`, parsed from the `dist-info` actually shipped in the zip — not 400 changed files. |
 | **Config impact, called out** | A new `os.environ["QUEUE_URL"]` is flagged as *"this must exist in the function's environment before you deploy"*. A new `boto3.client("sqs")` is flagged as *"the execution role may need new IAM permissions"*. These are the changes that break a deploy and never show up in a file diff. |
+| **A reindent is not a rewrite** | A file whose only change is indentation, trailing spaces, line endings or blank lines is labelled *whitespace only* instead of being reprinted line by line. One `black` run over the package would otherwise read as a total rewrite of every file it touched. `lw diff --whitespace` shows the hunk anyway. |
+| **Minified bundles are diffed by word** | An 8 KB bundle on one line has no lines to diff, so a changed digit costs you the whole file quoted twice. Instead you get the changed run and the text either side of it: `@ 19  …var t=1 → 2;a=1;a=1…`. Lock files are skipped for the same reason — the dependency row above already says what moved. |
 | **Renames survive edits** | A file that moved *and* changed is shown as one rename with a diff, not an unrelated add plus delete. |
 | **Secrets are diffed too** | An AWS key or Stripe token that appears between v7 and v8 gets its own section. Values are stored redacted; the secret itself never enters the index. |
 
@@ -81,6 +91,7 @@ $ lambda-watcher diff order-processor
 ╭──────────────────────────────────────────────────────────────────────╮
 │ order-processor   v0001 → v0002                                      │
 │ 2 added  2 modified  9 renamed  55 vendored (hidden)  +24 / -5 lines │
+│ to see the 55 vendored files: lw diff order-processor --vendor       │
 ╰──────────────────────────────────────────────────────────────────────╯
   size     8.3 KB → 9.2 KB (+886 B)
 
@@ -217,7 +228,7 @@ the manual recipes.
 | `ls` | Every function archived so far. |
 | `versions FN` | Every archived version of one function. |
 | `show FN [V]` | Runtime, handler, dependencies, env vars, services and findings for one version. `--files`, `--json`. |
-| `diff FN` | Compare two versions. Defaults to the last two. `--from`/`--to`, `--html`, `--open`, `--vendor`, `--no-patch`, `--json`. |
+| `diff FN` | Compare two versions. Defaults to the last two. `--from`/`--to`, `--html`, `--open`, `--vendor`, `--whitespace`, `--no-patch`, `--json`. |
 | `report FN` | Build a browsable HTML history: an index plus a diff for every step. |
 | `export FN [V]` | Get a version back out as a deployable zip (`--zip`) or a plain folder (`--tree`). |
 | `open FN [V]` | Open the function's mirror in your editor — every version in one folder, with history. Name a version to open just its files. |

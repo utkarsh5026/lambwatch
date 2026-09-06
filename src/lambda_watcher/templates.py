@@ -84,11 +84,42 @@ analysis:
     - "**/__pycache__/**"
 
 diff:
+  # Hide vendored dependency files, and explain the churn as dependency version
+  # numbers instead. Note that git_mirror.include_vendor below defaults the
+  # other way, on purpose: the mirror is a plain git repo and filtering it would
+  # make `lw git` lie about what shipped. So `lw diff` and `lw git ... diff`
+  # report different file counts for the same two versions. Each says so and
+  # names the other; `lw diff --vendor` and `lw diff --mirror` cross over.
   ignore_vendor: true
   context_lines: 3
   max_diff_file_kb: 512
   max_diff_lines: 2000
-  ignore_globs: ["**/*.pyc", "**/*.so", "**/*.map"]
+  # Never diffed, still tracked as added or removed. The lock files are here
+  # because the dependency section above the file list already says `boto3
+  # 1.34.0 -> 1.35.20`, and the lock file's own diff is a few thousand lines of
+  # resolved hashes saying the same thing less well.
+  ignore_globs:
+    - "**/*.pyc"
+    - "**/*.so"
+    - "**/*.map"
+    - "**/package-lock.json"
+    - "**/yarn.lock"
+    - "**/pnpm-lock.yaml"
+    - "**/poetry.lock"
+    - "**/Pipfile.lock"
+    - "**/composer.lock"
+    - "**/Cargo.lock"
+    - "**/go.sum"
+  # A file whose only change is indentation, trailing spaces, line endings or
+  # blank lines is reported as `whitespace only` rather than as a hunk with every
+  # touched line in it twice. One `black` run over the package is otherwise a
+  # total rewrite of every file it touched. `lw diff --whitespace` overrides it.
+  collapse_whitespace_only: true
+  # Past this average line length a file has no usable lines and is diffed word
+  # by word: a minified bundle is one 8,000-character line, and its line diff is
+  # the whole file quoted twice to show one changed digit. Mean rather than
+  # maximum, so one long data literal in an ordinary module still diffs by line.
+  long_line_mean_chars: 400
   # Files that moved *and* changed are matched by comparing candidates pairwise,
   # which is quadratic. Past this many pairs the diff stops and reports how many
   # files it could not check, rather than silently calling a restructure a pile
@@ -107,6 +138,10 @@ git_mirror:
   enabled: true
   author_name: lambda-watcher
   author_email: lambda-watcher@localhost
+  # Vendored files are committed too, so the mirror is what actually shipped
+  # rather than an edited version of it. This is the counterpart to
+  # diff.ignore_vendor above - set it false and the two agree, at the cost of a
+  # mirror you cannot deploy from.
   include_vendor: true
   tag_prefix: v
 

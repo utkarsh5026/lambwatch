@@ -10,6 +10,7 @@ editor.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -47,29 +48,40 @@ def git_available() -> bool:
     return shutil.which("git") is not None
 
 
+def _git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment every git call in this tool runs under.
+
+    Scrubbed so the mirror behaves the same on every machine and never blocks:
+    ``GIT_CONFIG_NOSYSTEM`` keeps system-wide config and hooks out, and
+    ``GIT_TERMINAL_PROMPT=0`` makes git fail instead of waiting forever on a
+    credential prompt — which matters because the mirror is written by the
+    background service, where there is no terminal to answer one.
+
+    It is a function rather than a constant because every caller needs a fresh
+    copy of ``os.environ`` and some add to it: :func:`commit_version` passes the
+    author and committer dates through ``extra``.
+    """
+    env = os.environ.copy()
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"})
+    if extra:
+        env.update(extra)
+    return env
+
+
 def _run(repo: Path, *args: str, check: bool = True, env_extra: dict[str, str] | None = None) -> str:
     """Run one git command in ``repo`` and return its stdout, stripped.
 
-    The environment is scrubbed so the mirror behaves the same on every machine:
-    ``GIT_CONFIG_NOSYSTEM`` keeps system-wide config and hooks out, and
-    ``GIT_TERMINAL_PROMPT=0`` makes git fail instead of blocking on a credential
-    prompt — which matters because this runs unattended in the background
-    service. ``check=False`` returns output for commands whose failure is
-    expected and handled.
+    The environment comes from :func:`_git_env`, so this and the interactive
+    :func:`passthrough` agree about what git they are talking to.
+    ``check=False`` returns output for commands whose failure is expected and
+    handled.
     """
-    import os
-
-    env = os.environ.copy()
-    # Keep the mirror hermetic: no user hooks, no global config surprises.
-    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"})
-    if env_extra:
-        env.update(env_extra)
     proc = subprocess.run(
         ["git", *args],
         cwd=str(repo),
         capture_output=True,
         text=True,
-        env=env,
+        env=_git_env(env_extra),
         timeout=300,
     )
     if check and proc.returncode != 0:
@@ -185,8 +197,54 @@ def diff(repo: Path, tag_a: str, tag_b: str, extra_args: list[str] | None = None
     ``extra_args`` goes in front of the tags, so ``["--stat"]`` and
     ``["--", "src/"]`` both work. Failure returns whatever git printed instead
     of raising: this feeds a report, and an empty diff is a fine answer.
+
+    This is what ``lw diff --mirror`` prints — see
+    :func:`lambda_watcher.cli._show_mirror_diff`, which resolves the two version
+    numbers into tags first. Check the tags with :func:`has_tag` before calling:
+    a missing one is an empty diff here, which reads exactly like two identical
+    versions.
     """
     args = ["diff", tag_a, tag_b]
     if extra_args:
         args = ["diff", *extra_args, tag_a, tag_b]
     return _run(repo, *args, check=False)
+
+
+def has_tag(repo: Path, tag: str) -> bool:
+    """True when ``tag`` names something the mirror can actually diff.
+
+    :func:`diff` reports a missing tag as an empty diff, which reads exactly like
+    two identical versions — so ``lw diff --mirror`` checks here first and says
+    which tag is absent instead. The tag can be missing for ordinary reasons:
+    the mirror was switched on after that version was archived, or
+    ``git_mirror.enabled`` was off at the time.
+    """
+    if not (repo / ".git").exists():
+        return False
+    try:
+        return bool(_run(repo, "rev-parse", "-q", "--verify", f"{tag}^{{commit}}", check=False))
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def passthrough(repo: Path, args: list[str]) -> int:
+    """Run one git command in the mirror with the terminal attached; returns its exit code.
+
+    This backs ``lw git my-fn log --oneline``. Output is deliberately *not*
+    captured, so the user's pager, colour and terminal width behave exactly as
+    they do in any other repository — which is the whole appeal of handing them
+    a real git repo.
+
+    It still goes through :func:`_git_env` rather than calling ``git`` directly,
+    so one module decides how this tool invokes git. That buys two things a bare
+    ``subprocess.run(["git", ...])`` does not: no system-level config or hooks
+    leaking into a mirror read, and ``GIT_TERMINAL_PROMPT=0``, so a repo that
+    somehow acquired a remote fails instead of hanging on a credential prompt.
+    The user's own global config still applies, which is what you want for a
+    command they typed themselves.
+
+    There is no timeout, unlike :func:`_run`: a pager holds the process open for
+    as long as the reader is reading.
+    """
+    proc = subprocess.run(["git", *args], cwd=str(repo), env=_git_env())
+    return proc.returncode

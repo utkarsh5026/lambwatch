@@ -25,7 +25,9 @@ from .db import Database
 from .diffing import code_dir, diff_from_index
 from .diffing.render_html import render_timeline, write_html
 from .diffing.render_text import render as render_diff
-from .gitmirror import git_available
+from .gitmirror import diff as mirror_diff
+from .gitmirror import git_available, has_tag
+from .gitmirror import passthrough as git_passthrough
 from .ingest import Ingestor
 from .service import (
     ServiceError,
@@ -929,6 +931,42 @@ def show(
 
 
 # ------------------------------------------------------------------- diff
+def _show_mirror_diff(cfg: Config, store: Store, row, a_seq: int, b_seq: int) -> None:
+    """Print the git mirror's own patch for two versions, from the diff command.
+
+    Not a second diff engine so much as a reconciliation. ``lw diff`` hides
+    vendored files and the mirror keeps them, so the same two versions read as
+    ``1 modified`` here and ``3 files changed`` there; getting both from one
+    command, under version specs that already resolve ``latest`` and ``-2``,
+    turns that from a contradiction into a policy difference the reader can see.
+    See :func:`_vendor_policy_note`, which says the same thing from the other
+    side, and :func:`lambda_watcher.gitmirror.diff`, which runs it.
+
+    Every failure names what to type next, because the mirror is optional and
+    each way it can be absent has a different answer: git missing, the mirror
+    switched off, or versions archived before it was switched on.
+    """
+    if not git_available():
+        _fail("git is not on PATH, so there is no mirror to read. "
+              f"`lw diff {row['slug']}` compares these versions without it.")
+    repo = store.repo_dir(row["slug"])
+    tag_a = f"{cfg.git_mirror.tag_prefix}{a_seq:04d}"
+    tag_b = f"{cfg.git_mirror.tag_prefix}{b_seq:04d}"
+    missing = [tag for tag in (tag_a, tag_b) if not has_tag(repo, tag)]
+    if missing:
+        _fail(f"the git mirror has no {' or '.join(missing)}. Set git_mirror.enabled in your "
+              f"config (`lw init` writes one) and re-ingest, or drop --mirror to compare with "
+              f"`lw diff {row['slug']}`.")
+    patch = mirror_diff(repo, tag_a, tag_b)
+    if not patch:
+        console.print(f"[green]The mirror reports no difference between {tag_a} and {tag_b}.[/green]")
+        return
+    # Straight to stdout rather than through rich: a patch has to survive being
+    # piped into `git apply`, and console.print would wrap long lines and read
+    # square brackets in the diff body as markup.
+    sys.stdout.write(patch + "\n")
+
+
 @app.command(rich_help_panel="Everyday")
 def diff(
     function: str = typer.Argument(..., autocompletion=_complete_function),
@@ -940,11 +978,23 @@ def diff(
     open_report: bool = typer.Option(False, "--open", help="Open the HTML report in your browser."),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Where to write the HTML report."),
     vendor: bool = typer.Option(False, "--vendor", help="Include vendored dependency files."),
+    whitespace: bool = typer.Option(
+        False, "--whitespace", help="Show the hunk for files that changed only in whitespace."
+    ),
     no_patch: bool = typer.Option(False, "--no-patch", help="Summary only, no line diffs."),
     json_out: bool = typer.Option(False, "--json", help="Emit the diff as JSON."),
+    mirror: bool = typer.Option(
+        False, "--mirror", help="Show the git mirror's answer for these two versions instead."
+    ),
 ) -> None:
     """Compare two versions of a function. Defaults to the last two."""
     cfg = _cfg()
+    # A retab renders as every touched line removed and re-added, so the diff
+    # collapses it to a label by default. This is the way back for the one time
+    # the reader wants to check that a reindent is all it was; the override goes
+    # on the config rather than through `compare_versions` because that is where
+    # everything else reads the setting from.
+    cfg.diff.collapse_whitespace_only = not whitespace
     db = _open_db(cfg)
     store = Store(cfg)
     row = _resolve_function(db, function)
@@ -963,6 +1013,13 @@ def diff(
         _fail("--from and --to are the same version")
     if a_seq > b_seq:
         a_seq, b_seq = b_seq, a_seq
+
+    if mirror:
+        if json_out or html or open_report or output:
+            _fail("--mirror prints git's own patch, so it cannot be combined with "
+                  "--json, --html or --output. Drop --mirror for those.")
+        _show_mirror_diff(cfg, store, row, a_seq, b_seq)
+        return
 
     include_vendor = True if vendor else None
     result = _build_diff(db, store, cfg, row, a_seq, b_seq, include_vendor,
@@ -1340,6 +1397,40 @@ def path(
         _open_path(target)
 
 
+#: git subcommands whose output is a patch or a changed-file list, and so is a
+#: direct answer to the question `lw diff` also answers.
+_PATCH_SUBCOMMANDS = {"diff", "show", "diff-tree", "whatchanged"}
+#: Flags that make any subcommand render one — `log --stat` included.
+_PATCH_FLAGS = {
+    "-p", "--patch", "--stat", "--numstat", "--shortstat", "--name-only", "--name-status",
+}
+
+
+def _vendor_policy_note(cfg: Config, slug: str, args: list[str]) -> str | None:
+    """The line that reconciles ``lw git my-fn diff`` with ``lw diff my-fn``, or None.
+
+    The two commands answer the same question under opposite vendor policies —
+    ``diff.ignore_vendor`` hides vendored files, ``git_mirror.include_vendor``
+    keeps them — so the same two versions come back as ``1 modified`` from one
+    and ``3 files changed`` from the other. Both defaults are right on their own
+    and neither answer is wrong, which is exactly why the discrepancy is
+    expensive to meet cold: there is nothing to find by reading harder. So
+    whichever command the reader typed says the other exists.
+
+    None when there is nothing to reconcile — the two settings agree, or the
+    subcommand renders no patch, as ``lw git my-fn log --oneline`` does not.
+    """
+    if not (cfg.diff.ignore_vendor and cfg.git_mirror.include_vendor):
+        return None
+    subcommand = next((a for a in args if not a.startswith("-")), None)
+    if subcommand not in _PATCH_SUBCOMMANDS and not _PATCH_FLAGS.intersection(args):
+        return None
+    return (
+        f"note: the mirror keeps vendored files. `lw diff {slug}` hides them and "
+        f"reports the dependency bumps instead."
+    )
+
+
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help="Run a git command inside a function's mirror repo, e.g. `lw git my-fn log --oneline`.",
@@ -1358,8 +1449,11 @@ def git(ctx: typer.Context, function: str = typer.Argument(...)) -> None:
             "Enable git_mirror in the config and re-ingest, or use `lw diff`."
         )
     args = list(ctx.args) or ["log", "--oneline", "--decorate", "-20"]
-    proc = subprocess.run(["git", "-C", str(repo), *args])
-    raise typer.Exit(proc.returncode)
+    note = _vendor_policy_note(cfg, row["slug"], args)
+    if note:
+        # stderr, so `lw git my-fn diff > patch.diff` still writes a clean patch.
+        err_console.print(note, style="dim")
+    raise typer.Exit(git_passthrough(repo, args))
 
 
 @app.command(rich_help_panel="Reading the archive")

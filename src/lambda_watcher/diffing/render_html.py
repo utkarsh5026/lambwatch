@@ -13,8 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..utils import format_ts, human_size, read_text, rename_label, signed
+from ..utils import format_ts, human_size, read_text, rename_label, signed, slugify
 from . import icons, intraline
+from .intraline import EDIT_CONTEXT
 from .compare import FileChange, MoveGroup, VersionDiff
 from .highlight import highlight, highlight_lines, language_of
 
@@ -93,6 +94,7 @@ h2::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
   letter-spacing: 0; white-space: nowrap; }
 .stat .k { color: var(--muted); font-size: 12px; margin-top: 1px; }
 .stat .k .hint { color: var(--faint); }
+.stat[title] { cursor: help; }
 .add { color: var(--add-fg); } .del { color: var(--del-fg); }
 
 /* ---- tables ---------------------------------------------------------- */
@@ -192,6 +194,20 @@ details.file[open] > .diff { border-top: none; }
 .wd { border-radius: 3px; }
 tr.add .wd { background: var(--add-word); }
 tr.del .wd { background: var(--del-word); }
+/* A file with no usable lines: one row per changed run, the unchanged text
+   either side dimmed so the eye lands on the part that moved. Shares the add
+   and delete colours with the table above so the two read as one legend. */
+.stat-line .skipped { color: var(--faint); font-style: italic; }
+.wordedit { overflow-x: auto; border-top: 1px solid var(--border); }
+.wordedit table { border-collapse: collapse; width: 100%; font-family: var(--mono);
+  font-size: 12px; line-height: 1.7; }
+.wordedit td { padding: 1px 8px; white-space: pre; vertical-align: top; }
+.wordedit td.at { width: 1%; text-align: right; color: var(--faint);
+  background: var(--sunken); border-right: 1px solid var(--border); }
+.wordedit td.run { width: 100%; color: var(--faint); }
+.wordedit .was { background: var(--del-word); color: var(--del-fg); border-radius: 3px; }
+.wordedit .was.gone { text-decoration: line-through; }
+.wordedit .now { background: var(--add-word); color: var(--add-fg); border-radius: 3px; }
 .tk-c { color: var(--tk-c); font-style: italic; }
 .tk-k { color: var(--tk-k); }
 .tk-s { color: var(--tk-s); }
@@ -406,6 +422,11 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
         stat += f'<span class="del">−{change.removed_lines}</span>'
     if change.size_delta:
         stat += f"<span>{signed(change.size_delta)} B</span>"
+    if note := change.line_count_note:
+        # The block is collapsed until someone opens it, so a summary row with
+        # no ``+`` and no ``−`` is all most readers ever see of this file. The
+        # note is the difference between "measured differently" and "unchanged".
+        stat += f'<span class="skipped">{_esc(note)}</span>'
 
     parts = [
         f'<details class="file" data-path="{_esc(change.path)} {_esc(change.old_path or "")}" '
@@ -442,19 +463,68 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
         parts.append("</table></div>")
         if change.truncated:
             parts.append('<div class="note">Diff truncated — raise <code>diff.max_diff_lines</code> to see the rest.</div>')
+    elif change.word_edits:
+        parts.append(_render_word_edits(change))
     else:
         reason = change.skipped_reason or (
             "file is empty" if change.kind in {"added", "removed"} else "no textual change"
         )
         old_size = change.old.size if change.old else 0
         new_size = change.new.size if change.new else 0
-        parts.append(
-            f'<div class="note">No line diff shown ({_esc(reason)}). '
-            f"{human_size(old_size)} → {human_size(new_size)}.</div>"
+        note = (
+            f'No line diff shown ({_esc(reason)}). '
+            f"{human_size(old_size)} → {human_size(new_size)}."
         )
+        if change.whitespace_only:
+            # Naming the two ways out matters more here than for the other
+            # reasons: this is the only one the reader might disagree with, and
+            # a reindent hiding a real edit is exactly what they would want to
+            # check.
+            note += (' Indentation, line endings or blank lines only — '
+                     '<code>lw diff --whitespace</code> shows it anyway.')
+        parts.append(f'<div class="note">{note}</div>')
 
     parts.append("</details>")
     return "\n".join(parts)
+
+
+def _render_word_edits(change: FileChange) -> str:
+    """Render the changed runs of a file whose lines are too long to diff by line.
+
+    A minified bundle is one 8,000-character line, so its unified diff is the
+    whole file quoted twice to show a changed digit. This is the fifty
+    characters that carry it instead: an offset, the text either side in grey,
+    and the change itself in the same red and green the table above uses.
+
+    No syntax highlighting, deliberately. The runs are fragments cut mid-token
+    out of generated code, and colouring them by a lexer that never saw the
+    statement they came from would be inventing structure to look thorough. See
+    :func:`~.intraline.long_line_edits` for how the runs are found, and
+    :func:`~.render_text._print_word_edits` for the same block in the terminal.
+    """
+    record = change.new or change.old
+    lines = record.lines if record else 0
+    rows = [
+        f'<div class="note">{lines} line{"s" if lines != 1 else ""} of '
+        f'{human_size(record.size if record else 0)} — no usable lines, so this is '
+        f'diffed by word.</div>',
+        '<div class="wordedit"><table>',
+    ]
+    for edit in change.word_edits:
+        lead = ("…" if edit.at > len(edit.lead) else "") + edit.lead
+        trail = edit.trail + ("…" if len(edit.trail) == EDIT_CONTEXT else "")
+        run = _esc(lead)
+        if edit.before:
+            gone = "" if edit.after else " gone"
+            run += f'<span class="was{gone}">{_esc(edit.before)}</span>'
+        if edit.before and edit.after:
+            run += " → "
+        if edit.after:
+            run += f'<span class="now">{_esc(edit.after)}</span>'
+        run += _esc(trail)
+        rows.append(f'<tr><td class="at">{edit.at}</td><td class="run">{run}</td></tr>')
+    rows.append("</table></div>")
+    return "\n".join(rows)
 
 
 def _render_move(group: MoveGroup) -> str:
@@ -531,31 +601,48 @@ def _stats(diff: VersionDiff) -> str:
     )
 
     # (value markup, label, what rides beside the value, what rides after the
-    # label). Both asides stay on their own line's baseline, so every cell of
-    # the rail is exactly two lines tall whatever it has to say.
-    stats: list[tuple[str, str, str, str]] = [
-        (str(sum(counts.values())), "files changed", "", ""),
-        (lines, "lines", "", ""),
-        (str(len(diff.deps)), "dependencies", "", ""),
-        (_esc(human_size(size_b)), "package size", f"{signed(size_b - size_a)} B", ""),
+    # label, what hovering the cell explains). Both asides stay on their own
+    # line's baseline, so every cell of the rail is exactly two lines tall
+    # whatever it has to say — which is why anything longer than a couple of
+    # words belongs in the last field rather than the fourth.
+    stats: list[tuple[str, str, str, str, str]] = [
+        (str(sum(counts.values())), "files changed", "", "", ""),
+        (lines, "lines", "", "", ""),
+        (str(len(diff.deps)), "dependencies", "", "", ""),
+        (_esc(human_size(size_b)), "package size", f"{signed(size_b - size_a)} B", "", ""),
     ]
     if diff.findings_new:
-        stats.append((str(len(diff.findings_new)), "new findings", "", ""))
+        stats.append((str(len(diff.findings_new)), "new findings", "", "", ""))
     if diff.vendor_files_changed:
-        stats.append((str(diff.vendor_files_changed), "vendored files", "", "not shown"))
+        # "not shown" on its own leaves the reader with a number and no way to
+        # act on it, and the thing they reach for next is the git mirror, which
+        # keeps vendored files and so disagrees with this page about how many
+        # files changed. Two lines of rail cannot hold that, so it is the
+        # tooltip that says which command produces which answer.
+        stats.append((
+            str(diff.vendor_files_changed), "vendored files", "", "not shown",
+            f"Hidden by diff.ignore_vendor; the dependency table explains the churn "
+            f"instead. `lw diff {slugify(diff.function_name)} --vendor --html` rebuilds "
+            f"this page with them listed. The git mirror keeps them either way, so "
+            f"`lw diff {slugify(diff.function_name)} --mirror` counts more changed files "
+            f"than this page does.",
+        ))
     if diff.renames_unexamined:
         # Without this the reader has no way to tell a complete rename map from
         # one the pair budget cut short.
         stats.append(
-            (str(diff.renames_unexamined), "files", "", "not rename-checked")
+            (str(diff.renames_unexamined), "files", "", "not rename-checked",
+             "The pair budget ran out, so some of the added and removed files below "
+             "may be halves of the same moved file. Raise diff.max_rename_pairs.")
         )
 
     cells: list[str] = []
-    for value, label, delta, hint in stats:
+    for value, label, delta, hint, tip in stats:
         beside = f'<span class="delta">{_esc(delta)}</span>' if delta else ""
         after = f' <span class="hint">{_esc(hint)}</span>' if hint else ""
+        title = f' title="{_esc(tip)}"' if tip else ""
         cells.append(
-            f'<div class="stat"><div class="v">{value}{beside}</div>'
+            f'<div class="stat"{title}><div class="v">{value}{beside}</div>'
             f'<div class="k">{_esc(label)}{after}</div></div>'
         )
     return f'<div class="stats">{"".join(cells)}</div>'

@@ -9,8 +9,9 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from ..utils import human_size, rename_label, signed
+from ..utils import human_size, rename_label, signed, slugify
 from .compare import MoveGroup, VersionDiff
+from .intraline import EDIT_CONTEXT
 
 _KIND_STYLE = {
     "added": "green",
@@ -63,7 +64,10 @@ def _stat_line(diff: VersionDiff) -> Text:
     """The one-line tally under the header: counts per kind, then ``+24 / -5 lines``.
 
     Says ``line counts skipped`` rather than ``+0/-0`` when diffs were not
-    computed — zero changes and unknown changes are different answers.
+    computed — zero changes and unknown changes are different answers. A third
+    answer gets the same treatment: files counted by word or labelled whitespace
+    only contribute no lines, so a diff made of those alone reads ``+0 / -0
+    lines (2 not counted by line)`` rather than claiming nothing moved.
     """
     counts = diff.counts()
     text = Text()
@@ -77,6 +81,8 @@ def _stat_line(diff: VersionDiff) -> Text:
         text.append(" / ")
         text.append(f"-{diff.total_removed_lines}", style="red")
         text.append(" lines")
+        if diff.lines_uncounted:
+            text.append(f" ({diff.lines_uncounted} not counted by line)", style="dim")
     else:
         text.append("line counts skipped (--no-patch)", style="dim")
     return text
@@ -93,6 +99,17 @@ def render_summary(console: Console, diff: VersionDiff) -> None:
     header.append(diff.function_name, style="bold")
     header.append(f"   v{diff.a_seq:04d} → v{diff.b_seq:04d}", style="bold cyan")
     rows: list[Text] = [header, _stat_line(diff)]
+    if diff.vendor_files_changed:
+        # The tally above says these files are hidden but not how to see them,
+        # and a reader who wants them reaches for the git mirror instead — which
+        # filters nothing and so answers a different question about the same two
+        # versions. Naming the flag keeps that reconciliation inside one command.
+        rows.append(Text(
+            f"to see the {diff.vendor_files_changed} vendored "
+            f"file{'s' if diff.vendor_files_changed != 1 else ''}: "
+            f"lw diff {slugify(diff.function_name)} --vendor",
+            style="dim",
+        ))
     if diff.renames_unexamined:
         # A partial rename map reads exactly like a complete one, so say so:
         # some of the adds and removes below may be halves of the same file.
@@ -210,6 +227,62 @@ def render_findings(console: Console, diff: VersionDiff) -> None:
         console.print(f"[green]Resolved findings:[/green] {len(diff.findings_fixed)}")
 
 
+def _lead(edit) -> str:
+    """The text before one word-level edit, with ``…`` only if something was cut.
+
+    An edit at the very start of the file has nothing elided in front of it, and
+    an ellipsis there claims otherwise — in a minified bundle, where every row
+    looks like every other row, that is the difference between "this is the
+    beginning" and "look further left".
+    """
+    return ("…" if edit.at > len(edit.lead) else "") + edit.lead
+
+
+def _trail(edit) -> str:
+    """The text after one word-level edit, with ``…`` only if something was cut.
+
+    Cannot tell a full context window from one that happened to end at the file's
+    last character, so a run of exactly :data:`~.intraline.EDIT_CONTEXT` closing
+    characters gets an ellipsis it does not strictly need. The other way round —
+    silently dropping the rest of an 8 KB bundle — is the mistake worth avoiding.
+    """
+    return edit.trail + ("…" if len(edit.trail) == EDIT_CONTEXT else "")
+
+
+def _print_word_edits(console: Console, change) -> None:
+    """Print the changed runs of a file with no usable lines, one row each.
+
+    ``@ 19   …e){var t=1 → 2;a=1;a=1…`` — the text either side is dimmed and the
+    changed run is not, because the point of the row is that the eye lands on
+    the change rather than searching a line for it. ``@`` is a character offset,
+    not a line number: the file has one line, which is the problem.
+
+    Built as a :class:`~rich.text.Text` piece by piece rather than printed as
+    markup, because the pieces are arbitrary file content and a minified bundle
+    is full of square brackets rich would read as style tags.
+    """
+    record = change.new or change.old
+    lines = record.lines if record else 0
+    console.print(
+        f"[dim]{lines} line{'s' if lines != 1 else ''} of "
+        f"{human_size(record.size if record else 0)}; showing the changed runs[/dim]"
+    )
+    for edit in change.word_edits:
+        row = Text(f"@ {edit.at:<8}", style="dim")
+        row.append(_lead(edit), style="dim")
+        if edit.before:
+            # Struck through only when nothing replaced it: with an arrow after
+            # it the removal is already stated, and saying it twice is louder
+            # than the change itself.
+            row.append(edit.before, style="red" if edit.after else "red strike")
+        if edit.before and edit.after:
+            row.append(" → ", style="dim")
+        if edit.after:
+            row.append(edit.after, style="green")
+        row.append(_trail(edit), style="dim")
+        console.print(row)
+
+
 def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
                  max_files: int = 200) -> None:
     """Print the file table and, unless asked not to, each file's line diff.
@@ -246,11 +319,17 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
     rows = diff.file_rows()
     for row in rows[:max_files]:
         move = row if isinstance(row, MoveGroup) else None
+        label = Text(_move_label(move) if move else _label(row),
+                     style="dim" if row.is_vendor else "")
+        if not move and (note := row.line_count_note):
+            # The + and − columns are blank for these, and a blank cell reads as
+            # "nothing changed" rather than "counted in a different unit". The
+            # note is what tells the two apart, so it rides on the path.
+            label.append(f"  · {note}", style="dim italic")
         table.add_row(
             Text("→" if move else marks.get(row.kind, "?"),
                  style=_KIND_STYLE["renamed"] if move else _KIND_STYLE.get(row.kind, "")),
-            Text(_move_label(move) if move else _label(row),
-                 style="dim" if row.is_vendor else ""),
+            label,
             str(row.added_lines or ""),
             str(row.removed_lines or ""),
             signed(row.size_delta) if row.size_delta else "",
@@ -263,11 +342,14 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
         return
 
     for change in diff.files:
-        if not change.diff_lines:
+        if not (change.diff_lines or change.word_edits):
             continue
         console.print()
         console.print(Rule(f"[bold]{_label(change)}[/bold]",
                            style=_KIND_STYLE.get(change.kind, "white")))
+        if change.word_edits:
+            _print_word_edits(console, change)
+            continue
         body = "\n".join(change.diff_lines)
         console.print(Syntax(body, "diff", theme="ansi_dark", word_wrap=False, background_color="default"))
         if change.truncated:

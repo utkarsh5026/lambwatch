@@ -1,11 +1,18 @@
-"""Which *words* of a changed line actually changed.
+"""Which *words* actually changed, when the line is the wrong unit.
 
 A diff that paints a whole line green says "this line is new". Most of the time
 it is not new — three characters of it are, and the eye has to re-read forty to
-find them. This module finds those characters, and marks them inside a line the
-highlighter has already coloured.
+find them. This module finds those characters.
 
-Two problems, kept apart:
+It does that at two scales, and the second is the reason the first exists at
+all. `pair_rows` and `mark` work *inside* a diff that already found its lines,
+narrowing an add/remove pair down to the words between them. `long_line_edits`
+works where there are no usable lines to find: a minified bundle is one
+8,000-character line, so a line diff quotes the entire file to show a changed
+digit, and the only readable answer is the changed run plus enough either side
+to place it.
+
+Three problems, kept apart:
 
 `pair_rows` decides *which* removed line a given added line is a rewrite of.
 Getting that wrong is worse than not marking at all — a confident mark on an
@@ -17,11 +24,16 @@ only when the two are more alike than not.
 so the wrapper is split at every tag boundary rather than straddling one: two
 adjacent marks paint one continuous background, and the nesting stays
 well-formed whatever `highlight` decided to emit.
+
+`long_line_edits` is the whole-file case, and is deliberately not a diff: it
+returns quotable excerpts, not a patch, because a patch of a one-line file is
+the file.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 #: Words, runs of whitespace, and every other character on its own. Splitting
@@ -170,3 +182,158 @@ def mark(rendered: str, spans: list[tuple[int, int]], css: str = "wd") -> str:
             out.append(piece[cursor - at :])
         at += width
     return "".join(out)
+
+
+#: A file whose lines average more than this many characters has no usable
+#: lines. Mean rather than maximum, on purpose: one 900-character embedded data
+#: literal in an otherwise ordinary module is still best read as a line diff,
+#: while a bundle is *every* line that wide.
+LONG_LINE_MEAN = 400
+
+#: Characters of unchanged text quoted either side of an edit. Enough to place
+#: the change in a file the reader has never opened, short enough that twenty
+#: edits still fit on a screen.
+EDIT_CONTEXT = 24
+
+#: How far apart the first and last difference may be before quoting the
+#: differences stops being an excerpt and starts being the file again. It is a
+#: span rather than an edit count because it also caps the token match below,
+#: which is quadratic: measured on random text, the middle costs 0.02s at this
+#: width, 0.07s at 8 KB, 0.3s at 16 KB and 3.5s at 64 KB. Reports render every
+#: consecutive pair of versions, so the ceiling has to sit where it does.
+MAX_EDIT_SPAN = 4000
+
+#: Past this many separate edits the reader is scrolling a list instead of
+#: reading a change, and the count itself is the more useful fact.
+MAX_EDITS = 20
+
+
+@dataclass
+class WordEdit:
+    """One changed run of characters in a file with no usable lines, in context.
+
+    ``…e){var t=`` ``1`` → ``2`` ``;a=1;a=1;a=1…`` — the bundle around it is
+    8,000 identical characters, and this is the fifty that carry the change.
+    ``lead`` and ``trail`` are quoted from the *new* text and are never part of
+    what changed; they exist so the reader can find the spot.
+
+    ``before`` is empty for a pure insertion and ``after`` for a pure deletion,
+    which is how a renderer tells the three cases apart. ``at`` is the character
+    offset in the new text, and is what distinguishes two edits whose context
+    happens to read alike — in a minified bundle that is most of them.
+    """
+
+    at: int
+    before: str
+    after: str
+    lead: str
+    trail: str
+
+    def as_dict(self) -> dict:
+        """This edit as plain JSON-ready data, for the machine-readable diff."""
+        return {"at": self.at, "before": self.before, "after": self.after,
+                "lead": self.lead, "trail": self.trail}
+
+
+def mean_line_length(text: str) -> float:
+    """Average characters per line, newline excluded. ``0.0`` for empty text.
+
+    The test for whether a file can be diffed by line at all: an 8 KB minified
+    bundle on one line scores 8,000, a Python module scores about 30. Compare
+    against :data:`LONG_LINE_MEAN`.
+    """
+    lines = text.splitlines()
+    if not lines:
+        return 0.0
+    return sum(len(line) for line in lines) / len(lines)
+
+
+def _common_edges(before: str, after: str) -> tuple[int, int]:
+    """How many characters the two texts share at the start and at the end.
+
+    The cheap half of the work, and for the case this module exists to serve —
+    a rebuilt bundle where one constant moved — very nearly all of it: 8,000
+    characters collapse to a two-character middle in one linear pass, before
+    the quadratic matcher sees anything.
+
+    The two counts never overlap, so ``aaa`` → ``aaaa`` reports a shared prefix
+    and a one-character insertion rather than counting the same ``a`` twice.
+    """
+    limit = min(len(before), len(after))
+    head = 0
+    while head < limit and before[head] == after[head]:
+        head += 1
+    tail = 0
+    while tail < limit - head and before[-1 - tail] == after[-1 - tail]:
+        tail += 1
+    return head, tail
+
+
+def _offsets(tokens: list[str]) -> list[int]:
+    """Where each token starts, plus one past the end.
+
+    Precomputed because the alternative — re-joining the prefix at every opcode
+    — is quadratic in a token list that can run to thousands of entries.
+    """
+    starts, at = [], 0
+    for token in tokens:
+        starts.append(at)
+        at += len(token)
+    starts.append(at)
+    return starts
+
+
+def long_line_edits(before: str, after: str) -> tuple[list[WordEdit], str | None]:
+    """The changed runs of two texts too wide to diff by line, and why not more.
+
+    Returns ``(edits, reason)`` with exactly one of them meaningful: a reason is
+    what to tell the reader in place of the edits, in the same voice as
+    :attr:`~.compare.FileChange.skipped_reason` — ``changes span 412,003
+    characters``. That reason reports the distance between the first difference
+    and the last, and deliberately not how much of the file differs: a rebuilt
+    bundle and four changed bytes at opposite ends of an intact one look the
+    same from here, and telling them apart costs the match this is declining to
+    run. Callers print the size delta alongside either way.
+
+    The shared prefix and suffix come off first, which is the whole reason this
+    is affordable: matching 8,000 tokens against 8,000 tokens is quadratic, but
+    a bundle rebuilt with one constant changed has a two-character middle. Only
+    that middle reaches the matcher, and past :data:`MAX_EDIT_SPAN` it does not
+    reach it at all.
+
+    See :func:`word_diff` for the same idea one line at a time.
+    """
+    if before == after:
+        return [], "no textual change"
+
+    head, tail = _common_edges(before, after)
+    old_mid = before[head : len(before) - tail]
+    new_mid = after[head : len(after) - tail]
+    span = max(len(old_mid), len(new_mid))
+    if span > MAX_EDIT_SPAN:
+        # Says how far apart the differences are, not how much differs, because
+        # only the first is known here: a wholly rebuilt bundle and four changed
+        # bytes at opposite ends of an intact one produce the same span, and
+        # measuring which is which costs the match this branch exists to skip.
+        return [], f"changes span {span:,} characters"
+
+    old, new = _tokens(old_mid), _tokens(new_mid)
+    old_at, new_at = _offsets(old), _offsets(new)
+
+    edits: list[WordEdit] = []
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        if len(edits) == MAX_EDITS:
+            return [], f"more than {MAX_EDITS} separate changes"
+        removed = old_mid[old_at[i1] : old_at[i2]]
+        added = new_mid[new_at[j1] : new_at[j2]]
+        at = head + new_at[j1]
+        edits.append(WordEdit(
+            at=at,
+            before=removed,
+            after=added,
+            lead=after[max(0, at - EDIT_CONTEXT) : at],
+            trail=after[at + len(added) : at + len(added) + EDIT_CONTEXT],
+        ))
+    return edits, None
