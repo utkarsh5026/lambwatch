@@ -81,6 +81,84 @@ def test_rename_with_an_edit_is_detected(cfg, db, ingestor: Ingestor, make_zip):
     assert renamed[0].added_lines > 0
 
 
+def _js_module(index: int) -> str:
+    """A small CommonJS handler, distinct per index so pairs cannot be swapped."""
+    return (
+        f"const ID = {index};\n"
+        "const AWS = require('aws-sdk');\n\n"
+        "exports.handler = async (event) => {\n"
+        "  const body = JSON.parse(event.body);\n"
+        "  console.log('order', body.id, ID);\n"
+        "  return { statusCode: 200 };\n"
+        "};\n"
+    )
+
+
+def test_a_js_to_ts_migration_reads_as_a_rename(cfg, db, ingestor: Ingestor, make_zip):
+    """The extension changing is the whole point of the rename, not a reason to miss it.
+
+    Rejecting a candidate pair whose language differs is a cheap filter, but
+    taken literally it excludes the one rename most worth showing: the migrated
+    file. Reported as an add beside a remove, the single line that actually
+    changed is buried inside a whole file of each.
+    """
+    before = _js_module(1)
+    after = before.replace("async (event)", "async (event: any)")
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1, "handler.js": before}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1, "handler.ts": after}))
+
+    diff = _diff(cfg, db, ingestor)
+    renamed = [c for c in diff.files if c.kind == "renamed"]
+    assert len(renamed) == 1
+    assert (renamed[0].old_path, renamed[0].path) == ("handler.js", "handler.ts")
+    assert (renamed[0].added_lines, renamed[0].removed_lines) == (1, 1)
+    assert diff.counts()["added"] == 0 and diff.counts()["removed"] == 0
+
+
+def test_a_whole_migration_costs_one_comparison_per_file(cfg, db, ingestor: Ingestor, make_zip):
+    """A real migration is a codebase, not a file, so it must land in the cheap pass.
+
+    Files that kept their name are paired first, one comparison each; a
+    migration keeps everything but the extension, so it has to be anchored the
+    same way. Left to the quadratic pass, 40 files would be 1,600 candidate
+    pairs and the budget here would run out long before the answer arrived.
+    """
+    cfg.diff.max_rename_pairs = 45           # 40 files, one comparison apiece, and change
+    before = {"lambda_function.py": PY_V1}
+    before.update({f"src/mod_{i}.js": _js_module(i) for i in range(40)})
+    after = {"lambda_function.py": PY_V1}
+    after.update({
+        f"src/mod_{i}.ts": _js_module(i).replace("async (event)", "async (event: any)")
+        for i in range(40)
+    })
+    ingestor.ingest(make_zip("fn.zip", before))
+    ingestor.ingest(make_zip("fn.zip", after))
+
+    diff = _diff(cfg, db, ingestor)
+    assert diff.counts()["renamed"] == 40
+    assert diff.renames_unexamined == 0
+    assert {(c.old_path, c.path) for c in diff.files if c.kind == "renamed"} == {
+        (f"src/mod_{i}.js", f"src/mod_{i}.ts") for i in range(40)
+    }
+
+
+def test_unrelated_languages_are_still_not_paired(cfg, db, ingestor: Ingestor, make_zip):
+    """Compatible is not the same as any: only languages that migrate may pair.
+
+    These two files are almost the same text, which is exactly the case the
+    language filter exists to reject - a ``.py`` deleted and a ``.js`` added are
+    two files, however alike a line-based matcher finds them.
+    """
+    body = "".join(f"KEY_{i} = {i}\n" for i in range(20))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1, "consts.py": body}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1, "consts.js": body + "X = 1\n"}))
+
+    diff = _diff(cfg, db, ingestor)
+    counts = diff.counts()
+    assert counts["renamed"] == 0
+    assert counts["added"] == 1 and counts["removed"] == 1
+
+
 def test_vendored_files_are_summarised_not_listed(cfg, db, ingestor: Ingestor, make_zip):
     vendor = "python/lib/python3.11/site-packages/pkg/mod.py"
     ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1, vendor: "x = 1\n"}))

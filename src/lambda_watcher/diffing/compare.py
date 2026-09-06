@@ -482,6 +482,56 @@ _RENAME_THRESHOLD = 0.55
 #: A same-name pair this alike is the same file, and needs no second opinion.
 _RENAME_CONFIDENT = 0.8
 
+#: Languages a file can be ported *into* while staying the same file, keyed to
+#: the family they share. The rename pass rejects a mismatched pair as a cheap
+#: way to skip files that cannot be two halves of one move, and a migration is
+#: precisely the pair that fails the letter of that test while satisfying its
+#: intent: ``handler.js`` -> ``handler.ts`` is one file gaining type
+#: annotations, not one deleted and an unrelated one written.
+#:
+#: Most near misses never reach here — :data:`~lambda_watcher.utils.LANG_BY_EXT`
+#: already folds ``.mjs``, ``.cjs`` and ``.jsx`` into ``javascript``, ``.pyi``
+#: into ``python`` and ``.yml`` into ``yaml``, so those arrive as equal labels.
+#: Ports that rewrite every line on the way across (Java to Kotlin, JSON to
+#: YAML) are left out deliberately: they cannot reach ``_RENAME_THRESHOLD``
+#: anyway, so admitting them would only spend budget to fail.
+_LANG_FAMILY: dict[str, str] = {
+    "javascript": "ecmascript",
+    "typescript": "ecmascript",
+}
+
+
+def _lang_compatible(old_lang: str, new_lang: str) -> bool:
+    """True when two language labels are near enough to be one file, moved.
+
+    ``python`` and ``python`` trivially; ``javascript`` and ``typescript``
+    because that pair is a migration rather than a rewrite. Anything else is a
+    mismatch worth rejecting before either file is read.
+    """
+    if old_lang == new_lang:
+        return True
+    family = _LANG_FAMILY.get(old_lang)
+    return family is not None and family == _LANG_FAMILY.get(new_lang)
+
+
+def _pair_key(path: str, lang: str) -> tuple[str, str]:
+    """The part of a name that survives a move, for anchoring candidate pairs.
+
+    ``handlers/util.py`` -> ``("util.py", "")``: the filename, because a moved
+    file usually keeps it. For a language that migrates, the extension is the
+    part that changed, so the key drops it and names the family instead —
+    ``src/handler.js`` and ``lib/handler.ts`` both key as ``("handler",
+    "ecmascript")``. That is what lets a whole ``.js`` -> ``.ts`` migration be
+    found by the cheap first pass of :func:`_similarity_renames` rather than by
+    its quadratic second one, and it is the same equality that earns the
+    corroboration bonus there.
+    """
+    name = path.rsplit("/", 1)[-1]
+    family = _LANG_FAMILY.get(lang)
+    if family is None:
+        return name, ""
+    return name.rpartition(".")[0] or name, family
+
 
 def _greedy_assign(pairs: list[tuple[float, str, str]]) -> dict[str, str]:
     """Take the strongest pairings first, one use per file. Returns new -> old."""
@@ -526,6 +576,11 @@ def _similarity_renames(
     added = sorted(added, key=lambda p: new[p].is_vendor)
     removed = sorted(removed, key=lambda p: old[p].is_vendor)
 
+    # Keyed once here rather than per pair, since the quadratic pass below asks
+    # for the same key of the same file thousands of times over.
+    new_keys = {path: _pair_key(path, new[path].lang) for path in added}
+    old_keys = {path: _pair_key(path, old[path].lang) for path in removed}
+
     max_bytes = cfg.max_diff_file_kb * 1024
     cache: dict[tuple[str, str], list[str] | None] = {}
 
@@ -560,7 +615,7 @@ def _similarity_renames(
         if budget <= 0:
             return False
         new_record, old_record = new[new_path], old[old_path]
-        if old_record.lang != new_record.lang:
+        if not _lang_compatible(old_record.lang, new_record.lang):
             return True
         # Sizes an order of magnitude apart are not the same file.
         if not (0.2 <= (new_record.size + 1) / (old_record.size + 1) <= 5):
@@ -578,24 +633,27 @@ def _similarity_renames(
         ratio = matcher.ratio()
         if ratio < _RENAME_THRESHOLD:
             return True
-        # A matching filename is strong corroboration for a plain move.
-        if old_path.rsplit("/", 1)[-1] == new_path.rsplit("/", 1)[-1]:
+        # A name that survived the move is strong corroboration for a plain
+        # move, or for a migration that changed only the extension.
+        if old_keys[old_path] == new_keys[new_path]:
             ratio = min(1.0, ratio + 0.15)
         pairs.append((ratio, new_path, old_path))
         return True
 
-    removed_by_base: dict[str, list[str]] = {}
+    removed_by_key: dict[tuple[str, str], list[str]] = {}
     for old_path in removed:
-        removed_by_base.setdefault(old_path.rsplit("/", 1)[-1], []).append(old_path)
+        removed_by_key.setdefault(old_keys[old_path], []).append(old_path)
 
-    # Pass 1: candidates that kept their filename. A moved file usually does, so
-    # the restructure that used to be hopeless - one directory renamed under
-    # every file in it - now costs one comparison per file instead of one per
-    # pair, and lands whole at any size. Running it first also means the budget
-    # is spent on the genuinely ambiguous candidates rather than on the ones
-    # whose name already answered the question.
+    # Pass 1: candidates that kept their name - the whole filename for a plain
+    # move, everything but the extension for a migration, which is the
+    # difference _pair_key normalises away. So the restructure that used to be
+    # hopeless - one directory renamed under every file in it, or a codebase
+    # ported from .js to .ts - now costs one comparison per file instead of one
+    # per pair, and lands whole at any size. Running it first also means the
+    # budget is spent on the genuinely ambiguous candidates rather than on the
+    # ones whose name already answered the question.
     for index, new_path in enumerate(added):
-        for old_path in removed_by_base.get(new_path.rsplit("/", 1)[-1], ()):
+        for old_path in removed_by_key.get(new_keys[new_path], ()):
             if not evaluate(new_path, old_path):
                 unswept = added[index:]
                 break
@@ -616,9 +674,9 @@ def _similarity_renames(
     # here with what it has rather than discarding pass 1 along with it.
     if not unswept:
         for index, new_path in enumerate(rest_added):
-            new_base = new_path.rsplit("/", 1)[-1]
+            new_key = new_keys[new_path]
             for old_path in rest_removed:
-                if old_path.rsplit("/", 1)[-1] == new_base:
+                if old_keys[old_path] == new_key:
                     continue  # scored in pass 1
                 if not evaluate(new_path, old_path):
                     unswept = rest_added[index:]
