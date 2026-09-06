@@ -41,9 +41,14 @@ What that means concretely, and what to preserve:
   to be in, not an error. `no_args_is_help=False` is deliberate.
 - **The watcher is a service, not a process the user babysits.** `lw start` installs a real
   per-OS **user** service ([service.py](src/lambda_watcher/service.py)) — never a system daemon,
-  never sudo. Every platform gets *something*: Linux with no systemd user session (WSL, slim
-  containers) falls back to a detached process with a pidfile and is told plainly that it will
-  not survive a reboot.
+  never sudo. `service.manager_chain()` is a *chain*, not a choice, because the preferred manager
+  can refuse at the moment of use rather than of selection: a Windows account without the right
+  to register a scheduled task, a Linux box with no systemd user session. The last entry always
+  works, so `install_service()` ends with a watcher running, and the status says which
+  arrangement it got and what that arrangement cannot do.
+- **A refused service must not fail the command that asked for it.** `lw setup` warns and exits
+  0 — the config, the archive and the backfill all still happened. Only `lw start`, whose sole
+  job it is, exits nonzero.
 - **The answer is written before anyone asks for it.** Each new version renders its own
   comparison during ingest (`Ingestor._render_report`, gated on `report.auto_diff`) into
   `reports/<function>/latest.html`, because nobody is watching a terminal when a background

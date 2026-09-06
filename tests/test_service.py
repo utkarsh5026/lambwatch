@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import plistlib
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -12,12 +13,17 @@ import pytest
 from lambda_watcher import service
 from lambda_watcher.config import Config
 from lambda_watcher.service import (
+    ServiceError,
+    ServiceStatus,
     LaunchdManager,
     PidfileManager,
     SchtasksManager,
+    StartupFolderManager,
     SystemdManager,
     current_status,
     get_manager,
+    install_service,
+    manager_chain,
     service_environment,
     watch_argv,
 )
@@ -59,14 +65,14 @@ def test_the_launch_agent_is_a_readable_plist(cfg: Config):
 
 
 def test_the_launch_agent_escapes_a_path_that_needs_it(cfg: Config, monkeypatch):
-    monkeypatch.setattr(service, "watch_argv", lambda _p=None: ["/Apps/A & B/lw", "watch"])
+    monkeypatch.setattr(service, "watch_argv", lambda *_a, **_k: ["/Apps/A & B/lw", "watch"])
     parsed = plistlib.loads(LaunchdManager(cfg)._plist(Path("/tmp/x.log")).encode("utf-8"))
     assert parsed["ProgramArguments"][0] == "/Apps/A & B/lw"
 
 
 def test_the_systemd_unit_quotes_an_executable_with_a_space(cfg: Config, monkeypatch):
     """systemd unquotes ExecStart itself, so a space has to be inside quotes."""
-    monkeypatch.setattr(service, "watch_argv", lambda _p=None: ["/opt/my tools/lw", "watch"])
+    monkeypatch.setattr(service, "watch_argv", lambda *_a, **_k: ["/opt/my tools/lw", "watch"])
     unit = SystemdManager(cfg)._unit()
     assert 'ExecStart="/opt/my tools/lw" watch' in unit
     assert "WantedBy=default.target" in unit
@@ -95,13 +101,79 @@ def test_linux_without_a_systemd_user_session_still_gets_a_watcher(cfg: Config, 
     assert isinstance(get_manager(cfg), PidfileManager)
 
 
+def test_windows_gets_a_fallback_when_the_task_scheduler_refuses(cfg: Config, monkeypatch):
+    """An ordinary account may not register a scheduled task; it still gets a watcher."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    chain = [m.name for m in manager_chain(cfg)]
+    assert chain == ["schtasks", "startup-folder"]
+
+
+def test_the_scheduled_task_is_scoped_to_this_user(cfg: Config, monkeypatch):
+    """ONLOGON with no /RU fires for *any* user, which needs elevation to register."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(service.getpass, "getuser", lambda: "someone")
+    calls = _fake_run(monkeypatch)
+    SchtasksManager(cfg).install()
+    create = next(c for c in calls if "/Create" in c)
+    assert create[create.index("/RU") + 1] == "someone"
+
+
+def test_a_refused_manager_falls_through_to_one_that_works(cfg: Config, monkeypatch):
+    monkeypatch.setattr(
+        SchtasksManager, "install",
+        lambda _self: (_ for _ in ()).throw(ServiceError("ERROR: Access is denied.")),
+    )
+    monkeypatch.setattr(
+        StartupFolderManager, "install",
+        lambda self: ServiceStatus(self.name, installed=True, running=True),
+    )
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert install_service(cfg).manager == "startup-folder"
+
+
+def test_when_everything_refuses_the_reasons_are_all_reported(cfg: Config, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    for manager in (SchtasksManager, StartupFolderManager):
+        monkeypatch.setattr(
+            manager, "install",
+            lambda _self, name=manager.name: (_ for _ in ()).throw(ServiceError(f"{name} said no")),
+        )
+    with pytest.raises(ServiceError) as caught:
+        install_service(cfg)
+    assert "schtasks said no" in str(caught.value)
+    assert "startup-folder said no" in str(caught.value)
+
+
+def test_the_startup_launcher_detaches_and_shows_no_console(cfg: Config, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", "C:\\Users\\someone\\AppData\\Roaming")
+    manager = StartupFolderManager(cfg)
+    assert manager.script_path.name == "lambda-watcher.cmd"
+    assert manager.script_path.parent.name == "Startup"
+
+    script = manager._script()
+    assert script.startswith("@echo off")
+    # `start ""` lets the launching cmd window close instead of waiting forever.
+    assert 'start ""' in script
+    # -m, not the console script: only the interpreter has a windowless build.
+    assert "-m lambda_watcher" in script
+    assert script.endswith("\r\n"), "a .cmd file wants CRLF"
+
+
+def test_the_windowless_command_avoids_the_console_script():
+    plain = watch_argv()
+    quiet = watch_argv(windowless=True)
+    assert plain[-1] == quiet[-1] == "watch"
+    assert quiet[1:3] == ["-m", "lambda_watcher"]
+
+
 # ------------------------------------------------------------------ lifecycle
 @pytest.fixture
 def idle_watcher(monkeypatch):
     """Stand in for `lw watch` with a process that just sits there."""
     monkeypatch.setattr(
         service, "watch_argv",
-        lambda _p=None: [sys.executable, "-c", "import time; time.sleep(30)"],
+        lambda *_a, **_k: [sys.executable, "-c", "import time; time.sleep(30)"],
     )
 
 
@@ -135,11 +207,29 @@ def test_starting_twice_does_not_start_a_second_watcher(cfg: Config, idle_watche
         manager.uninstall()
 
 
-def test_liveness_never_signals_a_windows_process(cfg: Config, monkeypatch):
-    """`os.kill(pid, 0)` is TerminateProcess on Windows, not a probe."""
+def _fake_run(monkeypatch, stdout: str = "", returncode: int = 0) -> list[list[str]]:
+    """Record what would have been run, and answer with canned output."""
+    calls: list[list[str]] = []
+
+    def run(argv, check=False):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(service, "_run", run)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("listing", "alive"),
+    [('"python.exe","4","Console","1","9,000 K"\n', True), ("INFO: No tasks are running.\n", False)],
+)
+def test_windows_liveness_asks_tasklist_instead_of_signalling(monkeypatch, listing, alive):
+    """`os.kill(pid, 0)` is TerminateProcess on Windows — asking would end it."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(service.os, "kill", lambda *_a: pytest.fail("signalled a live process"))
-    assert service._pid_alive(4) is False
+    calls = _fake_run(monkeypatch, stdout=listing)
+    assert service._pid_alive(4) is alive
+    assert calls[0][0] == "tasklist"
 
 
 def test_a_stale_pidfile_reads_as_not_running(cfg: Config):

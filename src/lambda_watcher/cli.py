@@ -27,7 +27,13 @@ from .diffing.render_html import render_timeline, write_html
 from .diffing.render_text import render as render_diff
 from .gitmirror import git_available
 from .ingest import Ingestor
-from .service import ServiceError, ServiceStatus, current_status, get_manager
+from .service import (
+    ServiceError,
+    ServiceStatus,
+    current_status,
+    install_service,
+    stop_service,
+)
 from .store import Store
 from .utils import format_ts, human_size, relative_ts, rmtree, setup_logging, slugify
 
@@ -268,9 +274,14 @@ def _main(
 
 # --------------------------------------------------------------- dashboard
 def _home_relative(path: Path) -> str:
-    """``~/Downloads`` rather than ``/Users/someone/Downloads``, where it applies."""
+    """``~/Downloads`` rather than ``/Users/someone/Downloads``, where it applies.
+
+    The separator is the platform's, not a hardcoded slash: pasting ``~/`` onto
+    a Windows relative path produced ``~/.lambda-watcher\\config.yaml``, which
+    is a path from neither operating system.
+    """
     try:
-        return "~/" + str(path.relative_to(Path.home()))
+        return f"~{os.sep}{path.relative_to(Path.home())}"
     except ValueError:
         return str(path)
 
@@ -446,17 +457,23 @@ def _offer_backfill(cfg: Config, yes: bool) -> None:
 
 
 # ------------------------------------------------------------------ service
-def _start_service(cfg: Config) -> None:
-    """Install and start the background watcher, explaining whatever happens."""
-    manager = get_manager(cfg, _CONFIG_PATH)
+def _start_service(cfg: Config) -> bool:
+    """Install and start the background watcher, explaining whatever happens.
+
+    Returns whether it got one. Not being able to install a service is a
+    disappointment, not a catastrophe — everything else `setup` did still
+    stands, and `lw watch` still works — so this reports and lets the caller
+    decide whether that is fatal.
+    """
     try:
-        state = manager.install()
+        state = install_service(cfg, _CONFIG_PATH)
     except ServiceError as exc:
-        _fail(
-            f"{exc}\n"
-            "  Run [bold]lw watch[/bold] in a terminal instead, or see docs/autostart.md "
-            "for the manual recipe."
+        err_console.print(
+            f"  [yellow]![/yellow] could not install a background watcher: {exc}\n"
+            "    [dim]Run [bold]lw watch[/bold] in a terminal instead, or see docs/autostart.md "
+            "for the manual recipe.[/dim]"
         )
+        return False
     if state.running:
         console.print(f"  [green]●[/green] watching in the background   [dim]{state.manager}[/dim]")
     else:
@@ -469,13 +486,21 @@ def _start_service(cfg: Config) -> None:
             "  [dim]no systemd user session here, so this will not come back after a reboot; "
             "run [bold]lw start[/bold] again, or see docs/autostart.md[/dim]"
         )
+    elif state.manager == "startup-folder":
+        console.print(
+            "  [dim]registering a scheduled task was refused, so this starts from your "
+            "Startup folder instead — it will come back at logon, but nothing will "
+            "restart it if it crashes[/dim]"
+        )
+    return True
 
 
 @app.command(rich_help_panel="Watching")
 def start() -> None:
     """Watch in the background, now and after every reboot."""
     cfg = _cfg()
-    _start_service(cfg)
+    if not _start_service(cfg):
+        raise typer.Exit(1)
 
 
 @app.command(rich_help_panel="Watching")
@@ -486,12 +511,8 @@ def stop(
 ) -> None:
     """Stop the background watcher."""
     cfg = _cfg()
-    manager = get_manager(cfg, _CONFIG_PATH)
     try:
-        if remove:
-            manager.uninstall()
-        else:
-            manager.stop()
+        stop_service(cfg, _CONFIG_PATH, remove=remove)
     except ServiceError as exc:
         _fail(str(exc))
     console.print(
@@ -504,12 +525,12 @@ def stop(
 def restart() -> None:
     """Stop and start the background watcher — use it after editing the config."""
     cfg = _cfg()
-    manager = get_manager(cfg, _CONFIG_PATH)
     try:
-        state = manager.restart()
+        stop_service(cfg, _CONFIG_PATH)
     except ServiceError as exc:
         _fail(str(exc))
-    console.print(f"[dim]{state.summary} ({state.manager})[/dim]")
+    if not _start_service(cfg):
+        raise typer.Exit(1)
 
 
 # ----------------------------------------------------------------- checkup
