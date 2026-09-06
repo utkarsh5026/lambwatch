@@ -163,26 +163,36 @@ class _LockedConnection:
     """
 
     def __init__(self, conn: sqlite3.Connection, lock: threading.RLock) -> None:
+        """Wrap ``conn``, serialising every statement through ``lock``."""
         self._conn = conn
         self._lock = lock
 
     def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        """Run one statement while holding the lock."""
         with self._lock:
             return self._conn.execute(*args, **kwargs)
 
     def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        """Run one statement over many parameter rows while holding the lock."""
         with self._lock:
             return self._conn.executemany(*args, **kwargs)
 
     def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        """Run a multi-statement script while holding the lock."""
         with self._lock:
             return self._conn.executescript(*args, **kwargs)
 
     def close(self) -> None:
+        """Close the underlying connection while holding the lock."""
         with self._lock:
             self._conn.close()
 
     def __getattr__(self, name: str) -> Any:
+        """Pass anything else through to the real connection.
+
+        Only statement execution needs serialising, so the plain attributes and
+        the methods that do no SQL of their own are forwarded unguarded.
+        """
         return getattr(self._conn, name)
 
 
@@ -190,6 +200,18 @@ class Database:
     """Thin wrapper around sqlite3 with the queries the CLI needs."""
 
     def __init__(self, path: Path) -> None:
+        """Open (or create) the index at ``path`` and bring the schema up to date.
+
+        The connection is deliberately shared rather than per-thread:
+        ``check_same_thread=False`` plus the re-entrant lock in
+        :class:`_LockedConnection` gives exactly one writer, which is what the
+        watcher's single ingest worker needs. ``isolation_level=None`` turns off
+        Python's implicit transactions so :meth:`transaction` can own them, and WAL
+        mode (set by :data:`SCHEMA`) lets readers work while that writer commits.
+
+        Creating the file and its parent directory is part of the job — no setup
+        step has to run first.
+        """
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -206,15 +228,22 @@ class Database:
 
     # -- lifecycle -------------------------------------------------------
     def close(self) -> None:
+        """Close the connection, ignoring an already-closed one.
+
+        Called from teardown paths that should not fail because the database went
+        away first.
+        """
         try:
             self.conn.close()
         except sqlite3.Error:
             pass
 
     def __enter__(self) -> Database:
+        """Support ``with Database(path) as db:``."""
         return self
 
     def __exit__(self, *_exc: object) -> None:
+        """Close the connection when the ``with`` block ends, error or not."""
         self.close()
 
     @contextmanager
@@ -232,6 +261,12 @@ class Database:
 
     # -- functions -------------------------------------------------------
     def get_function_by_name(self, name: str, case_insensitive: bool = True) -> sqlite3.Row | None:
+        """Look up one function by its exact name.
+
+        Matching ignores case by default, because ``OrderProcessor`` and
+        ``orderprocessor`` in two differently-cased downloads are one function, not
+        two.
+        """
         if case_insensitive:
             row = self.conn.execute(
                 "SELECT * FROM functions WHERE lower(name) = lower(?)", (name,)
@@ -257,6 +292,12 @@ class Database:
         return None
 
     def upsert_function(self, name: str, slug: str, now: str) -> int:
+        """Return the id for ``name``, creating the function if it is new.
+
+        Either way ``last_seen`` ends up as ``now``, which is what orders the
+        dashboard. This is the only place a function row is born, so an ingest of a
+        never-before-seen zip needs no separate registration step.
+        """
         existing = self.get_function_by_name(name)
         if existing:
             self.conn.execute(
@@ -270,6 +311,12 @@ class Database:
         return int(cur.lastrowid)
 
     def list_functions(self) -> list[sqlite3.Row]:
+        """Every function, with its version count and latest sequence number.
+
+        Ordered by ``last_seen`` descending, so whatever was deployed most recently
+        is the first row of ``lw list``. The two counts are subqueries rather than a
+        join so functions with no versions still appear.
+        """
         return self.conn.execute(
             """
             SELECT f.*,
@@ -292,27 +339,46 @@ class Database:
         return int(row["functions"]), int(row["versions"]), int(row["bytes"])
 
     def rename_function(self, function_id: int, new_name: str, new_slug: str) -> None:
+        """Point a function row at a new name and slug."""
         self.conn.execute(
             "UPDATE functions SET name = ?, slug = ? WHERE id = ?", (new_name, new_slug, function_id)
         )
 
     def delete_function(self, function_id: int) -> None:
+        """Delete a function and, by cascade, all of its versions and their rows.
+
+        Only removes the index entries. The archived files on disk are the source of
+        truth and are the caller's to remove.
+        """
         self.conn.execute("DELETE FROM functions WHERE id = ?", (function_id,))
 
     # -- aliases ---------------------------------------------------------
     def add_alias(self, function_id: int, pattern: str, is_regex: bool = False) -> None:
+        """Teach the identifier that a filename pattern belongs to this function.
+
+        Does nothing if the same pattern is already registered, so re-running a
+        setup step is harmless.
+        """
         self.conn.execute(
             "INSERT OR IGNORE INTO aliases(function_id, pattern, is_regex) VALUES(?,?,?)",
             (function_id, pattern, int(is_regex)),
         )
 
     def list_aliases(self) -> list[sqlite3.Row]:
+        """Every alias, with the name of the function it maps onto."""
         return self.conn.execute(
             "SELECT a.*, f.name AS function_name FROM aliases a JOIN functions f ON f.id = a.function_id"
         ).fetchall()
 
     # -- versions --------------------------------------------------------
     def next_seq(self, function_id: int) -> int:
+        """The sequence number the next version of this function should get.
+
+        Versions count from 1, so a function with nothing archived yet gets 1.
+        Derived from the highest sequence in use, so pruning old versions never
+        renumbers the ones that remain — these are what ``lw diff 7 8`` refers
+        to. Deleting the *newest* version does hand its number back out again.
+        """
         row = self.conn.execute(
             "SELECT COALESCE(MAX(seq), 0) AS m FROM versions WHERE function_id = ?", (function_id,)
         ).fetchone()
@@ -327,6 +393,12 @@ class Database:
         ).fetchone()
 
     def insert_version(self, values: dict[str, Any]) -> int:
+        """Insert a version row from a column/value dict and return its new id.
+
+        Takes a dict rather than a long parameter list because the caller builds
+        the row from a manifest, and the columns present vary with what the analysis
+        found.
+        """
         cols = ", ".join(values)
         marks = ", ".join("?" for _ in values)
         cur = self.conn.execute(
@@ -335,29 +407,47 @@ class Database:
         return int(cur.lastrowid)
 
     def list_versions(self, function_id: int, limit: int | None = None) -> list[sqlite3.Row]:
+        """This function's versions, newest first, optionally capped at ``limit``."""
         sql = "SELECT * FROM versions WHERE function_id = ? ORDER BY seq DESC"
         if limit:
             sql += f" LIMIT {int(limit)}"
         return self.conn.execute(sql, (function_id,)).fetchall()
 
     def get_version(self, function_id: int, seq: int) -> sqlite3.Row | None:
+        """One specific version by its sequence number, or None."""
         return self.conn.execute(
             "SELECT * FROM versions WHERE function_id = ? AND seq = ?", (function_id, seq)
         ).fetchone()
 
     def latest_version(self, function_id: int) -> sqlite3.Row | None:
+        """The most recently archived version of this function, or None."""
         return self.conn.execute(
             "SELECT * FROM versions WHERE function_id = ? ORDER BY seq DESC LIMIT 1", (function_id,)
         ).fetchone()
 
     def delete_version(self, version_id: int) -> None:
+        """Delete a version and, by cascade, its files, deps, findings and the rest."""
         self.conn.execute("DELETE FROM versions WHERE id = ?", (version_id,))
 
     def set_version_label(self, version_id: int, label: str | None) -> None:
+        """Attach a human label to a version, or clear it by passing None.
+
+        Lets a reader mark ``v7`` as ``the one that broke checkout`` and have it show
+        up in listings next to the sequence number.
+        """
         self.conn.execute("UPDATE versions SET label = ? WHERE id = ?", (label, version_id))
 
     # -- child rows ------------------------------------------------------
     def bulk_insert(self, table: str, columns: list[str], rows: list[tuple]) -> None:
+        """Insert many rows into one table in a single statement.
+
+        The write path adds thousands of ``files`` rows per version, and one
+        ``executemany`` is dramatically faster than a loop. An empty ``rows``
+        returns immediately rather than issuing a no-op statement.
+
+        The table and column names are interpolated into the SQL, so they must stay
+        internal constants — every value still goes through a placeholder.
+        """
         if not rows:
             return
         marks = ", ".join("?" for _ in columns)
@@ -366,26 +456,36 @@ class Database:
         )
 
     def files_for(self, version_id: int) -> list[sqlite3.Row]:
+        """Every indexed file in a version, ordered by path."""
         return self.conn.execute(
             "SELECT * FROM files WHERE version_id = ? ORDER BY path", (version_id,)
         ).fetchall()
 
     def deps_for(self, version_id: int) -> list[sqlite3.Row]:
+        """Every dependency recorded for a version, declared and installed alike."""
         return self.conn.execute(
             "SELECT * FROM deps WHERE version_id = ? ORDER BY manager, name", (version_id,)
         ).fetchall()
 
     def env_for(self, version_id: int) -> list[sqlite3.Row]:
+        """Every environment variable reference recorded for a version."""
         return self.conn.execute(
             "SELECT * FROM env_vars WHERE version_id = ? ORDER BY name", (version_id,)
         ).fetchall()
 
     def services_for(self, version_id: int) -> list[sqlite3.Row]:
+        """Every AWS service reference recorded for a version."""
         return self.conn.execute(
             "SELECT * FROM services WHERE version_id = ? ORDER BY service", (version_id,)
         ).fetchall()
 
     def findings_for(self, version_id: int, include_vendor: bool = False) -> list[sqlite3.Row]:
+        """Security and risk findings for a version, worst severity first.
+
+        Findings inside vendored code are hidden unless ``include_vendor`` is set:
+        a scan of ``node_modules`` turns up plenty that is nobody's business here
+        and would bury the handful that are.
+        """
         sql = "SELECT * FROM findings WHERE version_id = ?"
         if not include_vendor:
             sql += " AND is_vendor = 0"
@@ -402,6 +502,13 @@ class Database:
         source_path: str | None = None,
         detail: Any = None,
     ) -> None:
+        """Record something that happened, for the audit trail behind ``lw events``.
+
+        Every download the watcher sees is logged, including the ones that produced
+        no version — a duplicate download and an unchanged tree are both answers to
+        "why did nothing appear when I saved that zip?". A ``detail`` that is not
+        already a string is stored as JSON.
+        """
         payload = detail if isinstance(detail, str) or detail is None else json.dumps(detail)
         self.conn.execute(
             "INSERT INTO events(ts, kind, function_id, version_id, source_path, detail)"
@@ -410,6 +517,11 @@ class Database:
         )
 
     def recent_events(self, limit: int = 30) -> list[sqlite3.Row]:
+        """The most recent events, newest first, with function and version names joined in.
+
+        Left joins, so an event that never got as far as identifying a function
+        still shows up — those are usually the interesting ones.
+        """
         return self.conn.execute(
             """
             SELECT e.*, f.name AS function_name, v.seq AS version_seq
@@ -422,11 +534,23 @@ class Database:
         ).fetchall()
 
     def seen_download(self, zip_sha256: str) -> sqlite3.Row | None:
+        """The record of a previously-ingested zip with this hash, or None.
+
+        How the ingest recognises a literal re-download and skips it. Keyed on the
+        zip's own hash, not the tree hash — see the two-hash note in the module
+        docs.
+        """
         return self.conn.execute(
             "SELECT * FROM seen_downloads WHERE zip_sha256 = ?", (zip_sha256,)
         ).fetchone()
 
     def mark_download_seen(self, zip_sha256: str, now: str, source_name: str) -> None:
+        """Record that this zip has been handled, or bump its counter if it was already.
+
+        ``times_seen`` counting up is normal and harmless: browsers re-download,
+        and users re-save. It is kept because it answers "is this the same file
+        arriving again?" when someone wonders why no new version appeared.
+        """
         self.conn.execute(
             """
             INSERT INTO seen_downloads(zip_sha256, first_seen, last_seen, times_seen, source_name)
@@ -440,6 +564,11 @@ class Database:
 
     # -- search ----------------------------------------------------------
     def search_files(self, term: str, limit: int = 100) -> list[sqlite3.Row]:
+        """Find archived files whose path contains ``term``, across every function.
+
+        Answers "which of my Lambdas ships this file?" — substring matching, so
+        ``handler`` finds ``src/handler.py`` too.
+        """
         return self.conn.execute(
             """
             SELECT f.name AS function_name, v.seq, fi.path, fi.size
@@ -453,6 +582,12 @@ class Database:
         ).fetchall()
 
     def search_deps(self, term: str, limit: int = 200) -> list[sqlite3.Row]:
+        """Find versions that depend on a package whose name contains ``term``.
+
+        The query behind "which functions are still on the old ``requests``?".
+        Distinct rows, so a package declared and installed at once is listed once
+        per version rather than twice.
+        """
         return self.conn.execute(
             """
             SELECT DISTINCT f.name AS function_name, v.seq, d.manager, d.name, d.version

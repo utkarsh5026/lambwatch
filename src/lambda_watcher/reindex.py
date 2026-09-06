@@ -17,6 +17,11 @@ from .utils import LOG, utc_now_iso
 
 
 def _iter_version_dirs(functions_dir: Path):
+    """Walk the archive, yielding ``(function_dir, version_dir)`` in stable order.
+
+    Sorted at both levels so a rebuild processes versions in sequence order and
+    produces the same index every time.
+    """
     for function_dir in sorted(p for p in functions_dir.glob("*") if p.is_dir()):
         versions = function_dir / "versions"
         if not versions.is_dir():
@@ -78,6 +83,18 @@ def rebuild(cfg: Config) -> dict[str, int]:
 
 def _insert(db: Database, store: Store, function_id: int, manifest: dict[str, Any],
             version_dir: Path) -> None:
+    """Write one version's manifest into the index, exactly as an ingest would.
+
+    This is the rebuild half of the write path, and it has to agree with
+    ``Ingestor._index_version`` row for row — if the two drift, ``lw reindex``
+    silently produces a different database than the one it replaced. Adding an
+    analysis facet means touching both.
+
+    Missing manifest sections default to empty rather than raising, so one
+    version written by an older release cannot fail a whole rebuild. A manifest
+    with no recorded sequence number falls back to the numeric prefix of its
+    directory name, which is where the sequence came from in the first place.
+    """
     version_meta = manifest.get("version") or {}
     source = manifest.get("source") or {}
     runtime = manifest.get("runtime") or {}

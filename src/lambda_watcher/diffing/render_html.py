@@ -254,11 +254,24 @@ JS = """
 
 
 def _esc(value: Any) -> str:
+    """HTML-escape any value, quotes included, rendering None as an empty string.
+
+    Everything interpolated into the page goes through here. The report quotes
+    file contents and secret details that came out of a downloaded zip, so
+    nothing reaches the template unescaped.
+    """
     return html.escape("" if value is None else str(value), quote=True)
 
 
 @dataclass
 class _Row:
+    """One rendered line of a diff: its CSS class, both line numbers, and its text.
+
+    Line numbers are strings rather than ints because a row often has only one —
+    an added line has no old number — and an empty string is what the cell
+    should show.
+    """
+
     css: str
     old_no: str
     new_no: str
@@ -361,6 +374,17 @@ def _row_code(row: _Row, lang: str, old: _Painted, new: _Painted) -> str:
 
 
 def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | None = None) -> str:
+    """Render one file's change as a titled block with its diff table.
+
+    A rename is titled as one file with only the moved part written twice
+    (``boto3-{1.34.0 → 1.35.20}.dist-info/METADATA``), rather than as two
+    near-identical 90-character paths the reader has to compare by eye.
+
+    The version directories are passed through so the syntax highlighter can
+    read the whole file: colouring a hunk correctly means knowing what was
+    happening above it, since a line inside a block comment only looks like a
+    comment if you can see where it opened.
+    """
     lang = language_of(change.path, change.lang)
     # A rename is one file, not two. Written out in full twice, the two paths
     # are near-identical and the reader has to diff 90 characters by eye to
@@ -468,6 +492,12 @@ def _stats(diff: VersionDiff) -> str:
 
 
 def _dep_table(diff: VersionDiff) -> str:
+    """Render the dependency table, or an empty string when nothing moved.
+
+    Each row shows the package, the versions on both sides, and whether the fact
+    came from a manifest (``declared``) or from what was vendored in the zip
+    (``installed``).
+    """
     if not diff.deps:
         return ""
     rows = []
@@ -491,11 +521,19 @@ def _dep_table(diff: VersionDiff) -> str:
 
 
 def _context_section(diff: VersionDiff) -> str:
+    """Render the environment variables and AWS services that came and went.
+
+    Empty string when neither changed, so the section disappears rather than
+    appearing empty.
+    """
     blocks: list[str] = []
 
     def listing(label: str, values: list[str], css: str, hint: str = "") -> str:
-        # These are identifiers out of the function's own code, so they are set
-        # in the same face the diff sets them in — not as prose in a sentence.
+        """One labelled row of identifiers, or an empty string when there are none.
+
+        These are identifiers out of the function's own code, so they are set in
+        the same face the diff sets them in — not as prose in a sentence.
+        """
         if not values:
             return ""
         chips = " ".join(f'<span class="tok {css}">{_esc(v)}</span>' for v in values)
@@ -540,6 +578,11 @@ def _context_section(diff: VersionDiff) -> str:
 
 
 def _findings_section(diff: VersionDiff) -> str:
+    """Render new and resolved security findings, or an empty string when there are none.
+
+    Details are already redacted by the scanner, so what lands in the page shows
+    the shape of a credential without carrying the credential itself.
+    """
     if not diff.findings_new and not diff.findings_fixed:
         return ""
     rows = []
@@ -630,6 +673,12 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
 
 
 def write_html(diff: VersionDiff, path: Path, generated_by: str = "lambda-watcher") -> Path:
+    """Render the diff and write it to ``path``, creating parent directories.
+
+    Returns the path so callers can print it. This is what the background
+    ingest calls to leave ``reports/<function>/latest.html`` sitting there
+    before anyone thinks to ask what changed.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_html(diff, generated_by), encoding="utf-8")
     return path

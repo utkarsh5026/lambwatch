@@ -25,6 +25,13 @@ class GitUnavailable(RuntimeError):
 
 @dataclass
 class MirrorResult:
+    """What one mirror commit produced: the repo, the commit and the tag.
+
+    ``commit`` is None when there was nothing to commit and no HEAD to tag —
+    an empty first version. ``created_repo`` says whether this call initialised
+    the repository, which is worth reporting the first time.
+    """
+
     repo: Path
     commit: str | None
     tag: str | None
@@ -32,10 +39,24 @@ class MirrorResult:
 
 
 def git_available() -> bool:
+    """True when a usable ``git`` executable is on PATH.
+
+    The mirror is optional, so callers check this and carry on without it rather
+    than failing an ingest that has otherwise succeeded.
+    """
     return shutil.which("git") is not None
 
 
 def _run(repo: Path, *args: str, check: bool = True, env_extra: dict[str, str] | None = None) -> str:
+    """Run one git command in ``repo`` and return its stdout, stripped.
+
+    The environment is scrubbed so the mirror behaves the same on every machine:
+    ``GIT_CONFIG_NOSYSTEM`` keeps system-wide config and hooks out, and
+    ``GIT_TERMINAL_PROMPT=0`` makes git fail instead of blocking on a credential
+    prompt — which matters because this runs unattended in the background
+    service. ``check=False`` returns output for commands whose failure is
+    expected and handled.
+    """
     import os
 
     env = os.environ.copy()
@@ -74,6 +95,12 @@ def ensure_repo(repo: Path, cfg: GitMirrorConfig) -> bool:
 
 
 def _clear_worktree(repo: Path) -> None:
+    """Delete everything in the repo except ``.git``.
+
+    Each version is committed as the complete tree rather than as a patch, so
+    the worktree is emptied and refilled. That is what makes a file deleted
+    between two versions show up as a deletion in the commit.
+    """
     for entry in repo.iterdir():
         if entry.name == ".git":
             continue
@@ -87,6 +114,14 @@ def _clear_worktree(repo: Path) -> None:
 
 
 def _copy_tree(src: Path, repo: Path, vendor_globs: list[str], include_vendor: bool) -> int:
+    """Copy the extracted version into the repo worktree, returning the file count.
+
+    Skips anything under ``.git`` so the copy cannot damage the repository, and
+    skips vendored files when ``include_vendor`` is off — which keeps a mirror
+    readable when the alternative is ten thousand ``node_modules`` files per
+    commit. A file that cannot be copied is logged and stepped over rather than
+    failing the mirror.
+    """
     copied = 0
     for path in src.rglob("*"):
         if path.is_dir():
@@ -145,6 +180,12 @@ def commit_version(
 
 
 def diff(repo: Path, tag_a: str, tag_b: str, extra_args: list[str] | None = None) -> str:
+    """Run ``git diff`` between two tags in the mirror and return the raw output.
+
+    ``extra_args`` goes in front of the tags, so ``["--stat"]`` and
+    ``["--", "src/"]`` both work. Failure returns whatever git printed instead
+    of raising: this feeds a report, and an empty diff is a fine answer.
+    """
     args = ["diff", tag_a, tag_b]
     if extra_args:
         args = ["diff", *extra_args, tag_a, tag_b]

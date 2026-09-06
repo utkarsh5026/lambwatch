@@ -65,6 +65,39 @@ What that means concretely, and what to preserve:
   `autocompletion=_complete_function`.** The completer must never raise: it runs inside the
   user's shell on every TAB.
 
+## Write code a stranger can read
+
+**Readability is a correctness property here, not a finishing touch.** Someone arriving at this
+codebase should be able to scan a file top to bottom and follow what it does without
+reverse-engineering it from the implementation. That is a hard requirement on every change.
+
+- **Every function, method, class and property gets a docstring. No exceptions**, including
+  private helpers, nested closures, `__init__`, dunder methods and one-line properties. `src/`
+  is at 100% and stays there; a new function without one is an incomplete change. Trivial
+  accessors take a single line — the rule is that nothing is undocumented, not that everything
+  is an essay.
+- **Say what it does in plain language, then why it is that way.** One-line summary, blank line,
+  then prose. The summary carries the meaning: `Bytes as something a person can read`, not
+  `Format bytes`. Skip the ceremony — no `Args:`/`Returns:` blocks restating the type hints,
+  which are already on the signature.
+- **Show, don't characterise.** A concrete example beats a description of one: `myrepo-1.2.3` →
+  `v1.2.3`, `1,536` → `1.5 KB`, `src/app/handler.py` → `src.app.handler`. Where a function has
+  distinct outcomes, name them — see `IngestResult`, which spells out how `unchanged` differs
+  from `duplicate-download`.
+- **Document the judgement calls, because the code cannot.** Why a threshold is 0.55, why the
+  secret scanner under-reports on purpose, why an error is swallowed, what breaks if the
+  invariant is dropped. Anything that reads as arbitrary but is not is exactly what belongs in
+  a docstring — and a caller who has to read the body to use the function safely is a docstring
+  that has not been written yet.
+- **The docstring goes directly under the `def`, above any comment.** Explanatory comments a new
+  docstring makes redundant get deleted rather than left to drift out of sync. Keep a comment in
+  the body only where it explains one specific line.
+- **Cross-reference with `:func:` / `:meth:` / `:class:` / `:data:`, and inline code in double
+  backticks.** Link the other half of a paired code path from both ends, so it is discoverable
+  either way — `Ingestor._index_version` and `reindex._insert` name each other for that reason.
+- **Name things so the docstring has less to do.** A docstring rescuing an unclear name is the
+  wrong fix; rename it. Match the surrounding file's comment density and idiom.
+
 ## Architecture
 
 A zip lands in Downloads → it becomes version *N* of some Lambda function, archived on disk,

@@ -10,12 +10,20 @@ from .inventory import Inventory
 
 @dataclass
 class RuntimeGuess:
+    """Which Lambda runtime this package looks like, and why we think so.
+
+    ``evidence`` names the files and extensions that drove the guess, so a
+    surprising answer can be argued with rather than just disbelieved, and
+    ``all_scores`` keeps the runners-up for the same reason.
+    """
+
     runtime: str = "unknown"
     confidence: str = "low"
     evidence: list[str] = field(default_factory=list)
     all_scores: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
+        """This guess as plain JSON-ready data, for the manifest."""
         return {
             "runtime": self.runtime,
             "confidence": self.confidence,
@@ -60,10 +68,30 @@ _EXT_SCORES: dict[str, tuple[str, int]] = {
 
 
 def detect_runtime(inventory: Inventory) -> RuntimeGuess:
+    """Score the package's files to decide which runtime it targets.
+
+    Two kinds of signal are added up. Marker filenames are strong and specific
+    — ``lambda_function.py`` is worth 40 points towards Python, ``go.mod`` 30
+    towards Go — while file extensions are weak and cumulative, a few points
+    each. The language with the highest total wins.
+
+    Where a marker sits matters as much as which marker it is. One at the
+    package root is what the author intended; the same name inside
+    ``node_modules`` is somebody else's ``package.json`` and is worth a tenth as
+    much, and one buried a few directories down a third. Extensions inside
+    vendored trees are ignored outright, since a Python package that vendors a
+    JavaScript build tool should still read as Python.
+
+    Confidence is about the margin, not the total: ``high`` needs both a decisive
+    score and twice the runner-up, so a package that genuinely looks like two
+    runtimes says so instead of picking one and sounding certain. An empty or
+    unrecognisable tree returns the default ``unknown``/``low`` guess.
+    """
     scores: dict[str, int] = {}
     evidence: list[str] = []
 
     def bump(lang: str, points: int, why: str) -> None:
+        """Add ``points`` to a language's score, recording ``why`` once."""
         scores[lang] = scores.get(lang, 0) + points
         if why not in evidence:
             evidence.append(why)

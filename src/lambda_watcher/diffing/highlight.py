@@ -267,6 +267,12 @@ def highlight_lines(text: str, lang: str) -> list[str]:
     lines: list[list[str]] = [[]]
 
     def emit(chunk: str, cls: str) -> None:
+        """Append one grammar match to the line buffer, wrapped in its token class.
+
+        Splits on newlines as it goes, because a single match can span lines — a
+        block comment or a triple-quoted string — and the output is built per line.
+        An empty ``cls`` emits escaped text with no wrapper.
+        """
         for i, piece in enumerate(chunk.split("\n")):
             if i:
                 lines.append([])

@@ -59,6 +59,12 @@ class ServiceStatus:
 
     @property
     def summary(self) -> str:
+        """The state in three words: ``running``, ``installed, not running``, ``not installed``.
+
+        What ``lw status`` prints. Installed-but-not-running is its own answer on
+        purpose — it is the arrangement a reader has to act on, and the one they are
+        most likely to be in without knowing it.
+        """
         if self.running:
             return "running"
         if self.installed:
@@ -139,6 +145,14 @@ def service_environment(cfg: Config) -> dict[str, str]:
 
 
 def _run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+    """Run a service-manager command, turning its failures into :class:`ServiceError`.
+
+    Never raises the subprocess exceptions themselves: a missing ``systemctl`` or
+    a hung ``schtasks`` becomes a message naming what was tried, because that
+    message is going straight to a reader who is trying to get the watcher
+    started. ``check=True`` also turns a non-zero exit into one, with whatever
+    the command printed as the reason.
+    """
     LOG.debug("service: %s", " ".join(argv))
     try:
         proc = subprocess.run(
@@ -163,25 +177,50 @@ class Manager:
     windowless = False
 
     def __init__(self, cfg: Config, config_path: Path | None = None) -> None:
+        """Bind a manager to a config and the config file path to pass the watcher.
+
+        ``config_path`` matters because the service starts with an environment a
+        login shell never touched: unless the path is written into the unit, the
+        watcher would read a different config than the person installing it.
+        """
         self.cfg = cfg
         self.config_path = config_path
 
     # Every manager implements these four.
-    def install(self) -> ServiceStatus: raise NotImplementedError
-    def uninstall(self) -> None: raise NotImplementedError
-    def stop(self) -> None: raise NotImplementedError
-    def status(self) -> ServiceStatus: raise NotImplementedError
+    def install(self) -> ServiceStatus:
+        """Register the service and start it. Returns the resulting status."""
+        raise NotImplementedError
+
+    def uninstall(self) -> None:
+        """Remove the registration entirely, stopping it first if need be."""
+        raise NotImplementedError
+
+    def stop(self) -> None:
+        """Stop the running service but leave it registered."""
+        raise NotImplementedError
+
+    def status(self) -> ServiceStatus:
+        """Ask the platform what it currently knows about the service."""
+        raise NotImplementedError
 
     # -- shared helpers --------------------------------------------------
     @property
     def argv(self) -> list[str]:
+        """The absolute command this manager should run."""
         return watch_argv(self.config_path, windowless=self.windowless)
 
     @property
     def log_path(self) -> Path:
+        """``<root>/logs/service.log`` — where the unattended watcher writes."""
         return self.cfg.log_dir / "service.log"
 
     def _prepare_logs(self) -> Path:
+        """Create the log directory and return the log path.
+
+        Called before installing, because a unit that redirects output into a
+        directory that does not exist fails to start on some managers and silently
+        loses the output on others.
+        """
         self.cfg.log_dir.mkdir(parents=True, exist_ok=True)
         return self.log_path
 
@@ -193,9 +232,16 @@ class LaunchdManager(Manager):
 
     @property
     def unit_path(self) -> Path:
+        """``~/Library/LaunchAgents/com.lambdawatcher.plist`` — the user agent definition."""
         return Path("~/Library/LaunchAgents").expanduser() / f"{LAUNCHD_LABEL}.plist"
 
     def install(self) -> ServiceStatus:
+        """Write the plist and load it, replacing any agent already registered.
+
+        The unload before the load is not belt-and-braces: launchd will not re-read
+        a plist for a label it already knows, so reinstalling over an old definition
+        would otherwise keep running the old command.
+        """
         log = self._prepare_logs()
         self.unit_path.parent.mkdir(parents=True, exist_ok=True)
         self.unit_path.write_text(self._plist(log), encoding="utf-8")
@@ -206,16 +252,27 @@ class LaunchdManager(Manager):
         return self.status()
 
     def uninstall(self) -> None:
+        """Unload the agent and delete its plist."""
         if self.unit_path.exists():
             _run(["launchctl", "unload", "-w", str(self.unit_path)])
             self.unit_path.unlink()
 
     def stop(self) -> None:
+        """Unload the agent, which is the only way to make it stay stopped.
+
+        ``launchctl stop`` would be undone immediately by ``KeepAlive``.
+        """
         if self.unit_path.exists():
             # `unload` rather than `stop`: KeepAlive would restart it instantly.
             _run(["launchctl", "unload", str(self.unit_path)])
 
     def status(self) -> ServiceStatus:
+        """Ask launchd whether the agent is loaded, and for its pid if it is.
+
+        A plist on disk that launchd does not have loaded is reported as installed
+        but not running, with ``registered but not loaded`` as the detail — that is
+        a real state, and it is the one a stale install leaves behind.
+        """
         state = ServiceStatus(self.name, unit_path=self.unit_path, log_path=self.log_path)
         state.installed = self.unit_path.exists()
         if not state.installed:
@@ -233,6 +290,7 @@ class LaunchdManager(Manager):
         return state
 
     def _plist(self, log: Path) -> str:
+        """Render the launchd plist: the command, the environment and the log paths."""
         args = "\n".join(f"    <string>{_xml(a)}</string>" for a in self.argv)
         env = service_environment(self.cfg)
         env_block = ""
@@ -276,6 +334,7 @@ class SystemdManager(Manager):
 
     @property
     def unit_path(self) -> Path:
+        """``~/.config/systemd/user/lambda-watcher.service`` — the user unit file."""
         return Path("~/.config/systemd/user").expanduser() / f"{SYSTEMD_UNIT}.service"
 
     @staticmethod
@@ -298,6 +357,11 @@ class SystemdManager(Manager):
         return proc.returncode == 0
 
     def install(self) -> ServiceStatus:
+        """Write the unit, reload the daemon, then enable and start it.
+
+        ``enable --now`` is what makes the watcher both start immediately and come
+        back after a reboot.
+        """
         self._prepare_logs()
         self.unit_path.parent.mkdir(parents=True, exist_ok=True)
         self.unit_path.write_text(self._unit(), encoding="utf-8")
@@ -306,15 +370,22 @@ class SystemdManager(Manager):
         return self.status()
 
     def uninstall(self) -> None:
+        """Disable and stop the unit, delete it, and reload so systemd forgets it."""
         if self.unit_path.exists():
             _run(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT])
             self.unit_path.unlink()
             _run(["systemctl", "--user", "daemon-reload"])
 
     def stop(self) -> None:
+        """Stop the unit, leaving it enabled for the next login."""
         _run(["systemctl", "--user", "stop", SYSTEMD_UNIT])
 
     def status(self) -> ServiceStatus:
+        """Ask systemd whether the unit is active, and for its main pid.
+
+        Sets the detail to the ``journalctl`` command that shows the logs, since
+        systemd keeps them in the journal rather than in our log file.
+        """
         state = ServiceStatus(self.name, unit_path=self.unit_path)
         state.installed = self.unit_path.exists()
         if not state.installed:
@@ -328,6 +399,11 @@ class SystemdManager(Manager):
         return state
 
     def _unit(self) -> str:
+        """Render the systemd unit: the command, the environment and the restart policy.
+
+        ``Restart=on-failure`` with a delay is what makes this the preferred manager
+        on Linux — a watcher that dies on a bad zip comes back by itself.
+        """
         exec_start = " ".join(_sh_quote(a) for a in self.argv)
         env_lines = "".join(
             f'Environment="{k}={v}"\n' for k, v in service_environment(self.cfg).items()
@@ -353,6 +429,17 @@ class SchtasksManager(Manager):
     name = "schtasks"
 
     def install(self) -> ServiceStatus:
+        """Register a logon-triggered task, then run it once so it starts now.
+
+        ``/RU`` naming the current user is load-bearing rather than decoration: with
+        ``ONLOGON`` and no ``/RU`` the task fires for *any* user who logs on, which
+        is a machine-wide change and needs an elevated prompt — an ordinary account
+        just gets ``Access is denied``. Scoping the trigger to the current user is
+        something they are allowed to do without privileges.
+
+        The explicit ``/Run`` is because ``ONLOGON`` fires only at the *next* logon,
+        and ``lw start`` has to mean what it says.
+        """
         self._prepare_logs()
         command = " ".join(_win_quote(a) for a in self.argv)
         # /RU is not decoration. With ONLOGON and no /RU the task fires for *any*
@@ -369,13 +456,21 @@ class SchtasksManager(Manager):
         return self.status()
 
     def uninstall(self) -> None:
+        """End the task if it is running, then delete it."""
         _run(["schtasks", "/End", "/TN", SCHEDULED_TASK])
         _run(["schtasks", "/Delete", "/TN", SCHEDULED_TASK, "/F"])
 
     def stop(self) -> None:
+        """End the running task, leaving it registered for the next logon."""
         _run(["schtasks", "/End", "/TN", SCHEDULED_TASK])
 
     def status(self) -> ServiceStatus:
+        """Query Task Scheduler for the task and parse its state out of the listing.
+
+        A query that fails means no such task, which is reported as not installed
+        rather than as an error — that is the normal state before anything is
+        registered.
+        """
         state = ServiceStatus(self.name, log_path=self.log_path)
         proc = _run(["schtasks", "/Query", "/TN", SCHEDULED_TASK, "/FO", "LIST", "/V"])
         if proc.returncode != 0:
@@ -399,9 +494,16 @@ class PidfileManager(Manager):
 
     @property
     def pid_path(self) -> Path:
+        """``<root>/watcher.pid`` — the pid of the detached process, if one was started."""
         return self.cfg.root / "watcher.pid"
 
     def install(self) -> ServiceStatus:
+        """Start the watcher detached and record its pid, unless one is already running.
+
+        The log file is opened here and closed straight after handing it to the
+        child, which inherits it — the parent has no further use for the handle and
+        ``lw start`` exits immediately.
+        """
         existing = self.status()
         if existing.running:
             return existing
@@ -424,10 +526,16 @@ class PidfileManager(Manager):
         return self.status()
 
     def uninstall(self) -> None:
+        """Stop the process and remove the pidfile."""
         self.stop()
         self.pid_path.unlink(missing_ok=True)
 
     def stop(self) -> None:
+        """Terminate the recorded process and delete the pidfile.
+
+        Does nothing when no pid is recorded, so stopping something already stopped
+        is not an error.
+        """
         pid = self._recorded_pid()
         if pid is None:
             return
@@ -435,6 +543,12 @@ class PidfileManager(Manager):
         self.pid_path.unlink(missing_ok=True)
 
     def status(self) -> ServiceStatus:
+        """Report on the recorded process, checking whether it is really still alive.
+
+        Says out loud that this arrangement will not survive a reboot. That is the
+        honest limitation of the fallback, and the status is where the reader finds
+        out about it rather than after the next restart.
+        """
         state = ServiceStatus(self.name, log_path=self.log_path)
         pid = self._recorded_pid()
         if pid is None:
@@ -449,6 +563,7 @@ class PidfileManager(Manager):
         return state
 
     def _recorded_pid(self) -> int | None:
+        """The pid from the pidfile, or None if it is missing or not a number."""
         try:
             text = self.pid_path.read_text(encoding="utf-8").strip()
         except OSError:
@@ -528,6 +643,11 @@ class StartupFolderManager(PidfileManager):
 
     @property
     def script_path(self) -> Path:
+        """The ``.cmd`` this manager drops in the user's Startup folder.
+
+        Resolved from ``%APPDATA%``, falling back to the conventional location when
+        the variable is unset.
+        """
         appdata = os.environ.get("APPDATA")
         base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
         return (
@@ -536,6 +656,11 @@ class StartupFolderManager(PidfileManager):
         )
 
     def install(self) -> ServiceStatus:
+        """Start the watcher now, then leave a script that starts it at every logon.
+
+        The superclass starts the process and records its pid; this adds the Startup
+        entry that makes it come back at the next logon.
+        """
         state = super().install()                      # running now, pid recorded
         self.script_path.parent.mkdir(parents=True, exist_ok=True)
         self.script_path.write_text(self._script(), encoding="utf-8")
@@ -544,10 +669,16 @@ class StartupFolderManager(PidfileManager):
         return state
 
     def uninstall(self) -> None:
+        """Delete the startup script, then stop the running process."""
         self.script_path.unlink(missing_ok=True)
         super().uninstall()
 
     def status(self) -> ServiceStatus:
+        """Report the running process, treating the startup script as proof of install.
+
+        The script existing means the watcher is registered even when nothing is
+        running right now — which is what a status between logons looks like.
+        """
         state = super().status()
         if self.script_path.exists():
             state.installed = True
@@ -557,6 +688,11 @@ class StartupFolderManager(PidfileManager):
         return state
 
     def _script(self) -> str:
+        """Render the ``.cmd`` that launches the watcher detached at logon.
+
+        ``start ""`` is what detaches it, so the console window this script runs in
+        closes immediately instead of waiting on a watcher that never exits.
+        """
         command = " ".join(_cmd_quote(a) for a in self.argv)
         env = "".join(f'set "{k}={v}"\n' for k, v in service_environment(self.cfg).items())
         # `start ""` detaches, so the cmd window this script runs in closes at
@@ -653,6 +789,11 @@ def current_status(cfg: Config, config_path: Path | None = None) -> ServiceStatu
 
 # ------------------------------------------------------------------ quoting
 def _xml(value: str) -> str:
+    """Escape a string for embedding in the launchd plist.
+
+    The argv it escapes contains filesystem paths the user chose, so a path with
+    an ``&`` in it must not be able to break the XML.
+    """
     return (
         value.replace("&", "&amp;").replace("<", "&lt;")
         .replace(">", "&gt;").replace('"', "&quot;")

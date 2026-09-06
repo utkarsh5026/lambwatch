@@ -22,6 +22,13 @@ class ExtractError(RuntimeError):
 
 @dataclass
 class ExtractResult:
+    """What came out of one archive, and what was refused along the way.
+
+    ``skipped`` names members that were rejected — traversal attempts, symlinks,
+    device files — so a package that extracted with omissions can say so instead
+    of quietly losing files.
+    """
+
     dest: Path
     file_count: int = 0
     dir_count: int = 0
@@ -35,12 +42,24 @@ class ExtractResult:
 
     @property
     def compression_ratio(self) -> float:
+        """Uncompressed bytes per compressed byte, the zip-bomb tell.
+
+        An ordinary deployment package sits in the low single digits. A ratio in the
+        thousands means a small download that expands to fill a disk. Returns 0.0
+        rather than dividing by zero for an empty archive.
+        """
         if not self.total_compressed:
             return 0.0
         return self.total_uncompressed / self.total_compressed
 
 
 def _is_within(base: Path, target: Path) -> bool:
+    """True when ``target`` really resolves to somewhere inside ``base``.
+
+    The last line of defence against path traversal. Resolving both sides first
+    is what makes it meaningful: it follows ``..`` and symlinks to the real
+    destination, so a member that only looks contained is still caught.
+    """
     try:
         target.resolve().relative_to(base.resolve())
         return True

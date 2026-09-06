@@ -192,6 +192,8 @@ class GitMirrorConfig:
 
 @dataclass
 class NotifyConfig:
+    """Desktop notifications when a new version is archived."""
+
     enabled: bool = True
     #: Only notify when the new version differs from the previous one.
     only_on_change: bool = True
@@ -219,6 +221,14 @@ class ReportConfig:
 
 @dataclass
 class Config:
+    """The whole configuration: one nested dataclass per area, all defaulted.
+
+    Constructing ``Config()`` with no arguments produces a working setup, which
+    is what lets every command run before anybody has written a config file. The
+    YAML file is an overlay on top of this, not a requirement — see
+    :func:`load_config`.
+    """
+
     watch: WatchConfig = field(default_factory=WatchConfig)
     store: StoreConfig = field(default_factory=StoreConfig)
     naming: NamingConfig = field(default_factory=NamingConfig)
@@ -234,37 +244,52 @@ class Config:
     # -- derived paths ---------------------------------------------------
     @property
     def root(self) -> Path:
+        """The archive root, with ``~`` expanded. Everything else hangs off this."""
         return Path(self.store.root).expanduser()
 
     @property
     def db_path(self) -> Path:
+        """``<root>/index.db`` — the rebuildable SQLite index."""
         return self.root / "index.db"
 
     @property
     def functions_dir(self) -> Path:
+        """``<root>/functions/`` — one directory per archived function."""
         return self.root / "functions"
 
     @property
     def log_dir(self) -> Path:
+        """``<root>/logs/`` — where the background service writes."""
         return self.root / "logs"
 
     @property
     def reports_dir(self) -> Path:
+        """``<root>/reports/`` — generated HTML, one directory per function."""
         return self.root / "reports"
 
     @property
     def repos_dir(self) -> Path:
+        """``<root>/repos/`` — the per-function git mirrors."""
         return self.root / "repos"
 
     @property
     def quarantine_dir(self) -> Path:
+        """``<root>/quarantine/`` — archives that could not be extracted, plus a reason file."""
         return self.root / "quarantine"
 
     def ensure_dirs(self) -> None:
+        """Create the archive directories that must exist, ignoring ones that already do.
+
+        Called on every :class:`~lambda_watcher.store.Store` construction, so no
+        command depends on a setup step having been run first. ``repos/`` and
+        ``quarantine/`` are not in the list: each is created by the code that
+        first writes to it, so neither appears until it holds something.
+        """
         for path in (self.root, self.functions_dir, self.log_dir, self.reports_dir):
             path.mkdir(parents=True, exist_ok=True)
 
     def watch_dirs(self) -> list[Path]:
+        """The configured watch directories as paths, with ``~`` expanded."""
         return [Path(d).expanduser() for d in self.watch.dirs]
 
 
@@ -286,6 +311,11 @@ def _from_dict(cls: type, data: dict[str, Any]) -> Any:
 
 
 def default_config_path() -> Path:
+    """Where the config file lives: ``$LAMBDA_WATCHER_CONFIG`` or ``<home>/config.yaml``.
+
+    The environment variable is what lets a test or a one-off command point at a
+    scratch config without disturbing the real one.
+    """
     env = os.environ.get(CONFIG_ENV_VAR)
     if env:
         return Path(env).expanduser()

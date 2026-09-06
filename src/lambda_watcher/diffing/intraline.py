@@ -48,6 +48,11 @@ MAX_BLOCK = 40
 
 
 def _tokens(text: str) -> list[str]:
+    """Split a line into words, runs of whitespace and single punctuation marks.
+
+    Word-level rather than character-level, so a changed identifier is marked as
+    one unit instead of as the three letters inside it that happen to differ.
+    """
     return _TOKEN.findall(text)
 
 
@@ -137,6 +142,11 @@ def mark(rendered: str, spans: list[tuple[int, int]], css: str = "wd") -> str:
         return rendered
 
     def covered(start: int, stop: int) -> list[tuple[int, int]]:
+        """The parts of ``[start, stop)`` that fall inside a marked span.
+
+        Clipped to the piece being examined, so a span reaching across a syntax
+        boundary comes back as the portion belonging to this piece.
+        """
         return [(max(lo, start), min(hi, stop)) for lo, hi in spans if lo < stop and hi > start]
 
     out: list[str] = []

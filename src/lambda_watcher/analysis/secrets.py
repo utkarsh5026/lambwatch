@@ -20,6 +20,12 @@ from .inventory import Inventory
 
 @dataclass
 class Finding:
+    """One flagged line: a possible credential or a risky call.
+
+    ``detail`` is safe to print and store. For a matched secret it is already
+    redacted by :func:`_redact`; the value itself never leaves this module.
+    """
+
     kind: str
     severity: str  # high | medium | low
     path: str
@@ -28,6 +34,7 @@ class Finding:
     is_vendor: bool = False
 
     def as_dict(self) -> dict:
+        """This finding as plain JSON-ready data, for the manifest."""
         return {
             "kind": self.kind,
             "severity": self.severity,
@@ -40,6 +47,14 @@ class Finding:
 
 @dataclass(frozen=True)
 class Rule:
+    """One pattern to look for, and how loudly to complain when it matches.
+
+    ``group`` names the capture group holding the interesting value. A rule with
+    ``group=0`` has nothing to extract — ``-----BEGIN PRIVATE KEY-----`` is the
+    whole finding — and that difference decides both whether the placeholder
+    filter runs and whether the detail is redacted.
+    """
+
     kind: str
     severity: str
     pattern: re.Pattern[str]
@@ -103,6 +118,12 @@ _SCANNABLE = {
 
 
 def _shannon_entropy(value: str) -> float:
+    """Bits of entropy per character, used to tell keys from words.
+
+    A real credential draws on the whole alphabet fairly evenly and scores high;
+    an English word or a repeated placeholder scores low. Used only as one input
+    to :func:`_is_placeholder`, never on its own.
+    """
     if not value:
         return 0.0
     counts: dict[str, int] = {}
@@ -113,6 +134,13 @@ def _shannon_entropy(value: str) -> float:
 
 
 def _redact(value: str) -> str:
+    """Render a matched value so it can be stored without storing the secret.
+
+    ``AKIAIOSFODNN7EXAMPLE`` -> ``AKIA…LE (20 chars)``. Enough to recognise the
+    value again and to see it change between versions, not enough to use. Short
+    values are replaced by stars entirely, since four of eight characters would
+    give too much away.
+    """
     value = value.strip()
     if len(value) <= 8:
         return "*" * len(value)
@@ -120,6 +148,18 @@ def _redact(value: str) -> str:
 
 
 def _is_placeholder(value: str) -> bool:
+    """True when a matched value is obviously not a live credential.
+
+    The scanner would be useless if every ``password = "changeme"`` in an
+    example file produced a high-severity finding. Three things disqualify a
+    match: a known placeholder shape (``xxxx``, ``<your-key>``, ``${VAR}``,
+    ``TODO``), a value that is plainly an environment lookup rather than a
+    literal, and a long string whose entropy is too low to be a key — see
+    :func:`_shannon_entropy`.
+
+    Tuned to under-report. A missed secret is a gap in a tripwire; a wall of
+    false positives is a feature people switch off.
+    """
     stripped = value.strip()
     if not stripped or _PLACEHOLDER.match(stripped):
         return True
@@ -136,6 +176,25 @@ def scan(
     check_secrets: bool = True,
     max_files: int = 3000,
 ) -> list[Finding]:
+    """Scan the package for credentials and risky calls, worst first.
+
+    Runs two rule sets over every scannable text file: :data:`SECRET_RULES`,
+    which look for things that should never be in a zip (AWS keys, private
+    keys, GitHub and Slack tokens, connection strings with passwords in them),
+    and :data:`RISK_RULES`, which look for patterns worth a second glance
+    (``eval(``, ``shell=True``, ``verify=False``). Setting ``check_secrets``
+    False keeps only the second set.
+
+    Several limits keep this cheap and quiet rather than exhaustive. Vendored
+    files are skipped by default, files over 2 MB are not opened, ``max_files``
+    caps the walk, and lines longer than 4,000 characters are ignored because a
+    minified bundle matches everything and means nothing. Secret matches are
+    filtered through :func:`_is_placeholder`, and each ``(kind, value)`` pair is
+    reported once per file rather than once per occurrence.
+
+    Findings come back sorted by severity then location, so the first row is
+    the one worth reading. Values are redacted before they are returned.
+    """
     findings: list[Finding] = []
     entries = inventory.files if include_vendor else inventory.code_files
     rules = (SECRET_RULES if check_secrets else []) + RISK_RULES

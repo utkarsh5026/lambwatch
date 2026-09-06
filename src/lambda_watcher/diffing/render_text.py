@@ -36,6 +36,11 @@ def _label(change) -> str:
 
 
 def _stat_line(diff: VersionDiff) -> Text:
+    """The one-line tally under the header: counts per kind, then ``+24 / -5 lines``.
+
+    Says ``line counts skipped`` rather than ``+0/-0`` when diffs were not
+    computed — zero changes and unknown changes are different answers.
+    """
     counts = diff.counts()
     text = Text()
     for kind in ("added", "removed", "modified", "renamed"):
@@ -54,6 +59,12 @@ def _stat_line(diff: VersionDiff) -> Text:
 
 
 def render_summary(console: Console, diff: VersionDiff) -> None:
+    """Print the header panel: what changed about the package itself.
+
+    The framing before any file list — function name, the two versions, the
+    tally, and any change of runtime, handler or total size. Size carries a
+    colour, green when the package got smaller.
+    """
     header = Text()
     header.append(diff.function_name, style="bold")
     header.append(f"   v{diff.a_seq:04d} → v{diff.b_seq:04d}", style="bold cyan")
@@ -75,6 +86,12 @@ def render_summary(console: Console, diff: VersionDiff) -> None:
 
 
 def render_dependencies(console: Console, diff: VersionDiff) -> None:
+    """Print the dependency table, or nothing when no dependency moved.
+
+    Usually the section that explains the file churn: one row reading
+    ``boto3 1.34.0 → 1.35.20`` stands in for several thousand changed files
+    under ``site-packages``.
+    """
     if not diff.deps:
         return
     table = Table(title="Dependencies", title_justify="left", header_style="bold", box=None,
@@ -102,6 +119,14 @@ def render_dependencies(console: Console, diff: VersionDiff) -> None:
 
 
 def render_context(console: Console, diff: VersionDiff) -> None:
+    """Print what the new version needs from outside the zip.
+
+    Environment variables and AWS services that appeared or disappeared. These
+    are the changes a deployment can silently fail on — the code is fine, but
+    the function's configuration no longer matches it — so added env vars get an
+    explicit reminder that they have to exist in the console too. Prints nothing
+    when neither moved.
+    """
     rows: list[tuple[str, str, str]] = []
     if diff.env_added:
         rows.append(("Env vars added", ", ".join(diff.env_added), "green"))
@@ -123,6 +148,12 @@ def render_context(console: Console, diff: VersionDiff) -> None:
 
 
 def render_findings(console: Console, diff: VersionDiff) -> None:
+    """Print new security findings, and a count of the resolved ones.
+
+    New findings get a table, capped at 25 rows; resolved ones get a single
+    green line, since the detail of something that is gone is rarely worth the
+    space. Prints nothing when neither list has anything in it.
+    """
     if not diff.findings_new and not diff.findings_fixed:
         return
     console.print()
@@ -147,6 +178,17 @@ def render_findings(console: Console, diff: VersionDiff) -> None:
 
 def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
                  max_files: int = 200) -> None:
+    """Print the file table and, unless asked not to, each file's line diff.
+
+    The table lists every change with its line counts and size delta, capped at
+    ``max_files`` with a note saying how many were left out. ``show_diffs=False``
+    stops after the table, which is what ``--no-patch`` wants.
+
+    Files come pre-sorted by :func:`~.compare.compare_versions` — first-party
+    before vendored, modified before added — so reading top to bottom means
+    reading the most relevant changes first. A file whose diff was skipped
+    simply has no patch to print; the table row still records that it changed.
+    """
     if not diff.files:
         console.print("\n[dim]No file-level changes.[/dim]")
         return
@@ -189,6 +231,13 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
 
 
 def render(console: Console, diff: VersionDiff, show_diffs: bool = True) -> None:
+    """Render a whole diff to the console, in the order the layers matter.
+
+    The package, then its dependencies, then its environment, then findings,
+    then files. Ends with an explicit "identical" line when nothing changed at
+    all, because a command that prints nothing looks like a command that
+    failed.
+    """
     render_summary(console, diff)
     render_dependencies(console, diff)
     render_context(console, diff)

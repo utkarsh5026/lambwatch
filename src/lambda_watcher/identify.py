@@ -31,6 +31,14 @@ _BASE64ISH = re.compile(r"^[A-Za-z0-9+/=_-]{22,}$")
 
 @dataclass
 class Identification:
+    """The name chosen for a download, and how much to trust it.
+
+    ``strategy`` records which rule in the chain won — ``alias``, ``sidecar-json``,
+    ``filename``, ``fallback`` — so a wrong guess can be traced to the step that
+    made it rather than argued with in the abstract. ``raw_stem`` keeps the
+    original filename stem for the same reason.
+    """
+
     name: str
     slug: str
     confidence: str  # high | medium | low
@@ -38,6 +46,7 @@ class Identification:
     raw_stem: str
 
     def as_dict(self) -> dict[str, str]:
+        """This identification as plain JSON-ready data, for the manifest."""
         return {
             "name": self.name,
             "slug": self.slug,
@@ -65,8 +74,13 @@ def clean_stem(stem: str, strip_patterns: list[str]) -> str:
 
 
 def _looks_meaningless(candidate: str) -> bool:
-    # Short names like "etl" or "fn" are unusual but real; only reject what
-    # carries no information at all.
+    """True when a candidate name says nothing about which function this is.
+
+    ``package``, ``download``, ``a1b2c3d4e5f6``, ``42`` — names that would
+    produce a directory nobody could recognise later. Deliberately narrow: short
+    but real names like ``etl`` or ``fn`` are unusual and still allowed through,
+    because refusing a real name is worse than accepting a dull one.
+    """
     if len(candidate) < 2:
         return True
     if candidate.lower() in GENERIC_STEMS:
