@@ -135,6 +135,13 @@ def test_starting_twice_does_not_start_a_second_watcher(cfg: Config, idle_watche
         manager.uninstall()
 
 
+def test_liveness_never_signals_a_windows_process(cfg: Config, monkeypatch):
+    """`os.kill(pid, 0)` is TerminateProcess on Windows, not a probe."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(service.os, "kill", lambda *_a: pytest.fail("signalled a live process"))
+    assert service._pid_alive(4) is False
+
+
 def test_a_stale_pidfile_reads_as_not_running(cfg: Config):
     manager = PidfileManager(cfg)
     cfg.root.mkdir(parents=True, exist_ok=True)
