@@ -45,6 +45,11 @@ _VARIABLE = [
     # `doctor` reports the machine's free space, which is not a property of the
     # tool at all: the page quotes whatever the run that produced it saw.
     (re.compile(r"^(disk free)\s+\S+\s+.*$"), r"\1 <this machine>"),
+    # The banner carries the version, which moves with every release while the
+    # captures around it do not. Pinning it here would make a version bump a
+    # documentation edit, and the captures are demonstrating the watcher's
+    # output rather than which release printed it.
+    (re.compile(r"^lambda-watcher \d+\.\d+\.\d+\S*(?= — archiving into)"), "lambda-watcher <version>"),
 ]
 
 
