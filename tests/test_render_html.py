@@ -325,6 +325,38 @@ def test_icons_reference_the_sprite_rather_than_repeating_it() -> None:
 
 
 # ------------------------------------------------------------- on the page
+def test_the_hidden_vendored_count_explains_itself_on_the_page(
+    cfg, db, ingestor: Ingestor, make_zip
+):
+    """A number the page will not let you open needs to say what to run instead.
+
+    The terminal names the flag outright; the rail has two lines per cell and no
+    room for it, so the tooltip carries the reconciliation — including that the
+    git mirror counts these files and this page does not.
+    """
+    ingestor.ingest(make_zip("fn.zip", {
+        "lambda_function.py": PY_V1, "site-packages/boto3/__init__.py": "V = '1.34.0'\n"}))
+    ingestor.ingest(make_zip("fn.zip", {
+        "lambda_function.py": PY_V2, "site-packages/boto3/__init__.py": "V = '1.35.20'\n"}))
+    page = render_html(_diff(cfg, db, ingestor))
+
+    assert "vendored files" in page and "not shown" in page
+    tip = re.search(r'<div class="stat" title="([^"]*)"', page)
+    assert tip, "the vendored cell should explain itself on hover"
+    explanation = html_lib.unescape(tip.group(1))
+    assert "--vendor" in explanation and "--mirror" in explanation
+
+
+def test_a_cell_with_nothing_to_add_carries_no_tooltip(cfg, db, ingestor: Ingestor, make_zip):
+    """`cursor: help` on every cell would promise an explanation four of them lack."""
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V2}))
+    page = render_html(_diff(cfg, db, ingestor))
+
+    assert '<div class="stat"><div class="v">' in page
+    assert 'title=' not in page.split('<div class="stats">')[1].split("</div></div>")[0]
+
+
 def test_the_report_paints_the_code_and_carries_one_sprite(cfg, db, ingestor: Ingestor, make_zip):
     ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
     ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V2}))

@@ -138,6 +138,10 @@ git_mirror:
   enabled: true
   author_name: lambda-watcher
   author_email: lambda-watcher@localhost
+  # Vendored files are committed too, so the mirror is what actually shipped
+  # rather than an edited version of it. This is the counterpart to
+  # diff.ignore_vendor above - set it false and the two agree, at the cost of a
+  # mirror you cannot deploy from.
   include_vendor: true
   tag_prefix: v
 

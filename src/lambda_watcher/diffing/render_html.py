@@ -94,6 +94,7 @@ h2::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
   letter-spacing: 0; white-space: nowrap; }
 .stat .k { color: var(--muted); font-size: 12px; margin-top: 1px; }
 .stat .k .hint { color: var(--faint); }
+.stat[title] { cursor: help; }
 .add { color: var(--add-fg); } .del { color: var(--del-fg); }
 
 /* ---- tables ---------------------------------------------------------- */
@@ -600,31 +601,48 @@ def _stats(diff: VersionDiff) -> str:
     )
 
     # (value markup, label, what rides beside the value, what rides after the
-    # label). Both asides stay on their own line's baseline, so every cell of
-    # the rail is exactly two lines tall whatever it has to say.
-    stats: list[tuple[str, str, str, str]] = [
-        (str(sum(counts.values())), "files changed", "", ""),
-        (lines, "lines", "", ""),
-        (str(len(diff.deps)), "dependencies", "", ""),
-        (_esc(human_size(size_b)), "package size", f"{signed(size_b - size_a)} B", ""),
+    # label, what hovering the cell explains). Both asides stay on their own
+    # line's baseline, so every cell of the rail is exactly two lines tall
+    # whatever it has to say — which is why anything longer than a couple of
+    # words belongs in the last field rather than the fourth.
+    stats: list[tuple[str, str, str, str, str]] = [
+        (str(sum(counts.values())), "files changed", "", "", ""),
+        (lines, "lines", "", "", ""),
+        (str(len(diff.deps)), "dependencies", "", "", ""),
+        (_esc(human_size(size_b)), "package size", f"{signed(size_b - size_a)} B", "", ""),
     ]
     if diff.findings_new:
-        stats.append((str(len(diff.findings_new)), "new findings", "", ""))
+        stats.append((str(len(diff.findings_new)), "new findings", "", "", ""))
     if diff.vendor_files_changed:
-        stats.append((str(diff.vendor_files_changed), "vendored files", "", "not shown"))
+        # "not shown" on its own leaves the reader with a number and no way to
+        # act on it, and the thing they reach for next is the git mirror, which
+        # keeps vendored files and so disagrees with this page about how many
+        # files changed. Two lines of rail cannot hold that, so it is the
+        # tooltip that says which command produces which answer.
+        stats.append((
+            str(diff.vendor_files_changed), "vendored files", "", "not shown",
+            f"Hidden by diff.ignore_vendor; the dependency table explains the churn "
+            f"instead. `lw diff {slugify(diff.function_name)} --vendor --html` rebuilds "
+            f"this page with them listed. The git mirror keeps them either way, so "
+            f"`lw diff {slugify(diff.function_name)} --mirror` counts more changed files "
+            f"than this page does.",
+        ))
     if diff.renames_unexamined:
         # Without this the reader has no way to tell a complete rename map from
         # one the pair budget cut short.
         stats.append(
-            (str(diff.renames_unexamined), "files", "", "not rename-checked")
+            (str(diff.renames_unexamined), "files", "", "not rename-checked",
+             "The pair budget ran out, so some of the added and removed files below "
+             "may be halves of the same moved file. Raise diff.max_rename_pairs.")
         )
 
     cells: list[str] = []
-    for value, label, delta, hint in stats:
+    for value, label, delta, hint, tip in stats:
         beside = f'<span class="delta">{_esc(delta)}</span>' if delta else ""
         after = f' <span class="hint">{_esc(hint)}</span>' if hint else ""
+        title = f' title="{_esc(tip)}"' if tip else ""
         cells.append(
-            f'<div class="stat"><div class="v">{value}{beside}</div>'
+            f'<div class="stat"{title}><div class="v">{value}{beside}</div>'
             f'<div class="k">{_esc(label)}{after}</div></div>'
         )
     return f'<div class="stats">{"".join(cells)}</div>'

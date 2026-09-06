@@ -99,6 +99,17 @@ def render_summary(console: Console, diff: VersionDiff) -> None:
     header.append(diff.function_name, style="bold")
     header.append(f"   v{diff.a_seq:04d} → v{diff.b_seq:04d}", style="bold cyan")
     rows: list[Text] = [header, _stat_line(diff)]
+    if diff.vendor_files_changed:
+        # The tally above says these files are hidden but not how to see them,
+        # and a reader who wants them reaches for the git mirror instead — which
+        # filters nothing and so answers a different question about the same two
+        # versions. Naming the flag keeps that reconciliation inside one command.
+        rows.append(Text(
+            f"to see the {diff.vendor_files_changed} vendored "
+            f"file{'s' if diff.vendor_files_changed != 1 else ''}: "
+            f"lw diff {slugify(diff.function_name)} --vendor",
+            style="dim",
+        ))
     if diff.renames_unexamined:
         # A partial rename map reads exactly like a complete one, so say so:
         # some of the adds and removes below may be halves of the same file.
