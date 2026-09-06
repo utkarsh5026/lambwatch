@@ -79,6 +79,21 @@ def _words(cls: str, words: str) -> tuple[str, str]:
     return cls, r"\b(?:" + "|".join(words.split()) + r")\b"
 
 
+def _token_class(match: re.Match[str]) -> str:
+    """The one-letter token class of the rule that matched, ``""`` when none did.
+
+    ``re.Match.lastgroup`` is ``str | None`` because a pattern can match with no
+    named group taking part. A grammar built by :func:`_grammar` cannot: it names
+    every alternative and refuses to compile if a rule opens a capturing group of
+    its own, so exactly one named group is set on every match.
+
+    The empty fallback is therefore unreachable, and it is an empty string rather
+    than a raise or a guessed class because both callers already treat ``""`` as
+    "emit this uncoloured" - a report that has been archived must still render.
+    """
+    return match.lastgroup[0] if match.lastgroup else ""
+
+
 # --------------------------------------------------------------- shared rules
 # Quoted strings accept an unterminated tail so that the opening line of a
 # multi-line string still reads as one, rather than dissolving into keywords.
@@ -287,7 +302,7 @@ def highlight_lines(text: str, lang: str) -> list[str]:
             continue
         if start > pos:
             emit(text[pos:start], "")
-        emit(match.group(), match.lastgroup[0])
+        emit(match.group(), _token_class(match))
         pos = end
     emit(text[pos:], "")
     return ["".join(parts) for parts in lines]
@@ -312,7 +327,8 @@ def highlight(text: str, lang: str) -> str:
         if start > pos:
             parts.append(html.escape(text[pos:start], quote=True))
         token = html.escape(match.group(), quote=True)
-        parts.append(f'<span class="tk-{match.lastgroup[0]}">{token}</span>')
+        cls = _token_class(match)
+        parts.append(f'<span class="tk-{cls}">{token}</span>' if cls else token)
         pos = end
     parts.append(html.escape(text[pos:], quote=True))
     return "".join(parts)

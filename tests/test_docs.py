@@ -148,7 +148,10 @@ def test_site_command_reference_only_lists_real_commands() -> None:
     """Every `lw <cmd>` the site advertises is a command the CLI actually has."""
     from lambda_watcher.cli import app
 
-    real = {c.name or c.callback.__name__ for c in app.registered_commands}
+    # `callback` is Optional on Typer's CommandInfo; a registered command always
+    # has one, and a name no `lw <cmd>` can match is the harmless way to say so.
+    real = {c.name or (c.callback.__name__ if c.callback else "?")
+            for c in app.registered_commands}
     markup = SITE.read_text(encoding="utf-8")
     reference = re.search(r'<div class="cmdlist">.*?\n    </div>', markup, re.S)
     assert reference, "the command reference has moved"
@@ -164,9 +167,11 @@ def test_every_command_reference_entry_shows_its_output() -> None:
     entries = re.findall(r'<details class="cmd".*?</details>', markup, re.S)
     assert len(entries) >= 15, f"expected the full command reference, found {len(entries)}"
 
-    missing = [
-        re.search(r'<span class="cmd__name">(.*?)</span>', entry).group(1)
-        for entry in entries
-        if "<pre>" not in entry
-    ]
+    missing = []
+    for entry in entries:
+        if "<pre>" in entry:
+            continue
+        name = re.search(r'<span class="cmd__name">(.*?)</span>', entry)
+        assert name, "a command reference entry carries no name"
+        missing.append(name.group(1))
     assert not missing, f"listed with no example output: {missing}"

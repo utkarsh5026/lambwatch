@@ -153,6 +153,21 @@ CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 """
 
 
+def _inserted_id(cur: sqlite3.Cursor) -> int:
+    """The rowid an ``INSERT`` just created, refusing to invent one if it did not.
+
+    ``Cursor.lastrowid`` is typed ``int | None`` because it is ``None`` after a
+    statement that inserted nothing — a ``SELECT``, or an ``INSERT`` the cursor
+    never actually ran. Callers here always follow a single-row ``INSERT``, so the
+    ``None`` is unreachable; saying that out loud once beats an ``int(...)`` at
+    every call site that quietly turns the impossible case into ``TypeError`` from
+    somewhere in the stdlib.
+    """
+    if cur.lastrowid is None:                     # pragma: no cover - unreachable after INSERT
+        raise sqlite3.DatabaseError("INSERT did not produce a row id")
+    return cur.lastrowid
+
+
 class _LockedConnection:
     """Serialises access to one sqlite connection across threads.
 
@@ -308,7 +323,7 @@ class Database:
             "INSERT INTO functions(name, slug, first_seen, last_seen) VALUES(?,?,?,?)",
             (name, slug, now, now),
         )
-        return int(cur.lastrowid)
+        return _inserted_id(cur)
 
     def list_functions(self) -> list[sqlite3.Row]:
         """Every function, with its version count and latest sequence number.
@@ -404,7 +419,7 @@ class Database:
         cur = self.conn.execute(
             f"INSERT INTO versions({cols}) VALUES({marks})", tuple(values.values())
         )
-        return int(cur.lastrowid)
+        return _inserted_id(cur)
 
     def list_versions(self, function_id: int, limit: int | None = None) -> list[sqlite3.Row]:
         """This function's versions, newest first, optionally capped at ``limit``."""

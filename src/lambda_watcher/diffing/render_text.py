@@ -318,17 +318,22 @@ def render_files(console: Console, diff: VersionDiff, show_diffs: bool = True,
     marks = {"added": "+", "removed": "−", "modified": "~", "renamed": "→", "mode-changed": "m"}
     rows = diff.file_rows()
     for row in rows[:max_files]:
-        move = row if isinstance(row, MoveGroup) else None
-        label = Text(_move_label(move) if move else _label(row),
-                     style="dim" if row.is_vendor else "")
-        if not move and (note := row.line_count_note):
-            # The + and − columns are blank for these, and a blank cell reads as
-            # "nothing changed" rather than "counted in a different unit". The
-            # note is what tells the two apart, so it rides on the path.
-            label.append(f"  · {note}", style="dim italic")
+        # Branching on the row itself rather than aliasing it to a `move`
+        # variable: `kind` and `line_count_note` are a FileChange's, and only
+        # this shape tells a reader - and a type checker - which half owns them.
+        if isinstance(row, MoveGroup):
+            mark = Text("→", style=_KIND_STYLE["renamed"])
+            label = Text(_move_label(row), style="dim" if row.is_vendor else "")
+        else:
+            mark = Text(marks.get(row.kind, "?"), style=_KIND_STYLE.get(row.kind, ""))
+            label = Text(_label(row), style="dim" if row.is_vendor else "")
+            if note := row.line_count_note:
+                # The + and − columns are blank for these, and a blank cell reads as
+                # "nothing changed" rather than "counted in a different unit". The
+                # note is what tells the two apart, so it rides on the path.
+                label.append(f"  · {note}", style="dim italic")
         table.add_row(
-            Text("→" if move else marks.get(row.kind, "?"),
-                 style=_KIND_STYLE["renamed"] if move else _KIND_STYLE.get(row.kind, "")),
+            mark,
             label,
             str(row.added_lines or ""),
             str(row.removed_lines or ""),

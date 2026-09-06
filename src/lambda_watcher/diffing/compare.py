@@ -889,8 +889,10 @@ def _diff_deps(old_rows: list[Any], new_rows: list[Any]) -> list[DepChange]:
     collapsed: list[DepChange] = []
     by_identity: dict[tuple[str, str, str, str | None, str | None], list[DepChange]] = {}
     for change in changes:
-        key = (change.manager, change.name.lower(), change.kind, change.old_version, change.new_version)
-        by_identity.setdefault(key, []).append(change)
+        # Not `key`: `key()` is the sort helper defined above, in this same scope.
+        identity = (change.manager, change.name.lower(), change.kind,
+                    change.old_version, change.new_version)
+        by_identity.setdefault(identity, []).append(change)
     for group in by_identity.values():
         if len(group) > 1:
             # Keep the installed row: it is what actually shipped.
