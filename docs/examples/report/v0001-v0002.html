@@ -184,6 +184,9 @@ tr.del .wd { background: var(--del-word); }
 .empty { color: var(--muted); padding: 16px 0; }
 footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border);
   color: var(--faint); font-size: 12px; line-height: 1.7; }
+.moved-list { margin: 0; padding: 10px 16px 12px 34px; list-style: disc;
+  color: var(--muted); font-size: 12px; line-height: 1.9; }
+.moved-list .hint { color: var(--faint); }
 .hidden { display: none !important; }
 svg.sprite { display: none; }
 .fic { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor;
@@ -230,12 +233,12 @@ svg.sprite { display: none; }
     <h1>order-processor
       <span class="ver">v0001<span class="arrow">→</span>v0002</span></h1>
     <div class="sub">
-      2 added, 2 modified, 3 renamed, 52 vendored · v0001 archived 2026-09-04 23:52,
-      v0002 archived 2026-09-04 23:52
+      2 added, 2 modified, 9 renamed, 55 vendored · v0001 archived 2026-09-06 15:45,
+      v0002 archived 2026-09-06 15:45
     </div>
   </header>
 
-  <div class="stats"><div class="stat"><div class="v">7</div><div class="k">files changed</div></div><div class="stat"><div class="v"><span class="add">+24</span><span class="del">−5</span></div><div class="k">lines</div></div><div class="stat"><div class="v">3</div><div class="k">dependencies</div></div><div class="stat"><div class="v">8.9 KB<span class="delta">+782 B</span></div><div class="k">package size</div></div><div class="stat"><div class="v">3</div><div class="k">new findings</div></div><div class="stat"><div class="v">52</div><div class="k">vendored files <span class="hint">not shown</span></div></div></div>
+  <div class="stats"><div class="stat"><div class="v">13</div><div class="k">files changed</div></div><div class="stat"><div class="v"><span class="add">+24</span><span class="del">−5</span></div><div class="k">lines</div></div><div class="stat"><div class="v">3</div><div class="k">dependencies</div></div><div class="stat"><div class="v">9.2 KB<span class="delta">+886 B</span></div><div class="k">package size</div></div><div class="stat"><div class="v">3</div><div class="k">new findings</div></div><div class="stat"><div class="v">55</div><div class="k">vendored files <span class="hint">not shown</span></div></div></div>
   <h2>Dependencies</h2><div class='scroll'><table class='grid'><thead><tr><th></th><th>package</th><th>from</th><th>to</th><th>manager</th><th>origin</th></tr></thead><tbody><tr><td><span class="chip added">added</span></td><td class="mono">pydantic</td><td class="mono del">—</td><td class="mono add">2.9.0</td><td>pip</td><td>installed</td></tr><tr><td><span class="chip changed">changed</span></td><td class="mono">boto3</td><td class="mono del">1.34.0</td><td class="mono add">1.35.20</td><td>pip</td><td>installed</td></tr><tr><td><span class="chip changed">changed</span></td><td class="mono">botocore</td><td class="mono del">1.34.0</td><td class="mono add">1.35.20</td><td>pip</td><td>installed</td></tr></tbody></table></div>
   <h2>Configuration impact</h2><table class='grid'><tbody><tr><td class='label'>Environment variables added</td><td><span class="tok added">QUEUE_URL</span><div class="sub" style="margin-top:6px">These must exist in the function&#x27;s environment configuration before you deploy.</div></td></tr><tr><td class='label'>AWS services added</td><td><span class="tok added">sqs</span><div class="sub" style="margin-top:6px">The execution role may need new IAM permissions.</div></td></tr></tbody></table>
   <h2>New findings</h2><div class='scroll'><table class='grid'><thead><tr><th>severity</th><th>kind</th><th>where</th><th>detail</th></tr></thead><tbody><tr><td><span class="chip high">high</span></td><td>aws-access-key-id</td><td class="mono">config.py:6</td><td class="mono">AKIA…LE (20 chars)</td></tr><tr><td><span class="chip high">high</span></td><td>stripe-key</td><td class="mono">config.py:7</td><td class="mono">sk_l…dc (32 chars)</td></tr><tr><td><span class="chip low">low</span></td><td>debug-flag</td><td class="mono">config.py:8</td><td class="mono">DEBUG = True</td></tr></tbody></table></div>
@@ -347,6 +350,7 @@ svg.sprite { display: none; }
 <tr><td class="ln">13</td><td class="ln">14</td><td class="mark"></td><td class="code">    )</td></tr>
 </table></div>
 </details>
+<details class="file" data-path="site-packages/boto3-1.35.20.dist-info/INSTALLER site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.35.20.dist-info/WHEEL site-packages/boto3-1.35.20.dist-info/top_level.txt site-packages/boto3-1.34.0.dist-info/INSTALLER site-packages/boto3-1.34.0.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/WHEEL site-packages/boto3-1.34.0.dist-info/top_level.txt" data-vendor="1" data-files="3"><summary><span class="chip renamed">moved</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/boto3-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/</span></span><span class="stat-line"><span>4 files moved</span><span class="del">1 edited</span><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></summary><ul class="moved-list"><li class="mono">INSTALLER</li><li class="mono">METADATA <span class="hint">edited</span></li><li class="mono">WHEEL</li><li class="mono">top_level.txt</li></ul></details>
 <details class="file" data-path="site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/METADATA" data-vendor="1">
 <summary>
 <span class="chip renamed">renamed</span>
@@ -362,6 +366,7 @@ svg.sprite { display: none; }
 <tr><td class="ln">4</td><td class="ln">4</td><td class="mark"></td><td class="code">Summary: The AWS SDK for Python</td></tr>
 </table></div>
 </details>
+<details class="file" data-path="site-packages/botocore-1.35.20.dist-info/INSTALLER site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.35.20.dist-info/WHEEL site-packages/botocore-1.35.20.dist-info/top_level.txt site-packages/botocore-1.34.0.dist-info/INSTALLER site-packages/botocore-1.34.0.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/WHEEL site-packages/botocore-1.34.0.dist-info/top_level.txt" data-vendor="1" data-files="3"><summary><span class="chip renamed">moved</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/botocore-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/</span></span><span class="stat-line"><span>4 files moved</span><span class="del">1 edited</span><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></summary><ul class="moved-list"><li class="mono">INSTALLER</li><li class="mono">METADATA <span class="hint">edited</span></li><li class="mono">WHEEL</li><li class="mono">top_level.txt</li></ul></details>
 <details class="file" data-path="site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/METADATA" data-vendor="1">
 <summary>
 <span class="chip renamed">renamed</span>
@@ -379,7 +384,7 @@ svg.sprite { display: none; }
 </details>
 
   <footer>
-    Generated by lambda-watcher on 2026-09-04 23:52.
+    Generated by lambda-watcher on 2026-09-06 15:45.
     Content hashes ignore zip timestamps, so re-downloading unchanged code does not create a new version.
   </footer>
 </div>
@@ -398,7 +403,7 @@ svg.sprite { display: none; }
       var isVendor = el.getAttribute('data-vendor') === '1';
       var ok = (!term || path.indexOf(term) !== -1) && (showVendor || !isVendor);
       el.classList.toggle('hidden', !ok);
-      if (ok) shown++;
+      if (ok) shown += parseInt(el.getAttribute('data-files') || '1', 10);
     });
     var counter = document.getElementById('shown-count');
     if (counter) counter.textContent = shown + ' of ' + files.length + ' files shown';

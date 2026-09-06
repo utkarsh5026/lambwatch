@@ -89,6 +89,16 @@ diff:
   max_diff_file_kb: 512
   max_diff_lines: 2000
   ignore_globs: ["**/*.pyc", "**/*.so", "**/*.map"]
+  # Files that moved *and* changed are matched by comparing candidates pairwise,
+  # which is quadratic. Past this many pairs the diff stops and reports how many
+  # files it could not check, rather than silently calling a restructure a pile
+  # of unrelated adds and deletes. Raise it to trade seconds for completeness.
+  max_rename_pairs: 120000
+  # A directory rename reaches the diff as one rename per file. Past this many
+  # files moving between the same two directories, the move is reported as a
+  # single line naming both directories and the count. Raise it a lot to always
+  # see every file listed on its own row.
+  min_moved_files: 3
 
 git_mirror:
   # Keeps one git repo per function under functions/<name>/repo/, one commit
