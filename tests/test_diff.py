@@ -651,7 +651,7 @@ def test_a_rebuilt_bundle_reports_its_size_rather_than_quoting_itself(
 
     (change,) = _diff(cfg, db, ingestor).files
     assert change.long_lines and not change.word_edits
-    assert change.skipped_reason.startswith("changes span ")
+    assert (change.skipped_reason or "").startswith("changes span ")
     assert "z=9;" * 40 not in _patch(_diff(cfg, db, ingestor))
 
 

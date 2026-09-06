@@ -11,7 +11,7 @@ import re
 import sys
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import yaml
 
@@ -325,17 +325,26 @@ class Config:
 
 
 def _from_dict(cls: type, data: dict[str, Any]) -> Any:
-    """Build a (possibly nested) dataclass from a plain dict, ignoring unknowns."""
+    """Build a (possibly nested) dataclass from a plain dict, ignoring unknowns.
+
+    The field types come from :func:`typing.get_type_hints`, not from
+    ``Field.type``. This module has ``from __future__ import annotations``, which
+    makes that attribute the *source text* of the annotation — the string
+    ``"WatchConfig"``, never the class — so ``is_dataclass(f.type)`` is False for
+    every field and a nested section would be handed to the constructor as a raw
+    dict. No config section nests today, which is precisely what makes it worth
+    fixing here rather than the first time one does: the symptom is a config
+    field that silently holds a dict, not an error.
+    """
+    hints = get_type_hints(cls)
+    known = {f.name for f in fields(cls)}
     kwargs: dict[str, Any] = {}
-    known = {f.name: f for f in fields(cls)}
     for key, value in (data or {}).items():
-        f = known.get(key)
-        if f is None:
+        if key not in known:
             continue
-        if is_dataclass(f.type) and isinstance(value, dict):
-            kwargs[key] = _from_dict(f.type, value)
-        elif isinstance(value, dict) and hasattr(f.type, "__dataclass_fields__"):
-            kwargs[key] = _from_dict(f.type, value)
+        declared = hints.get(key)
+        if isinstance(value, dict) and isinstance(declared, type) and is_dataclass(declared):
+            kwargs[key] = _from_dict(declared, value)
         else:
             kwargs[key] = value
     return cls(**kwargs)

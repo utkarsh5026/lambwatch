@@ -27,6 +27,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 from .config import Config
 from .utils import LOG
@@ -618,7 +619,22 @@ def _terminate(pid: int) -> None:
         raise ServiceError(f"could not stop pid {pid}: {exc}") from exc
 
 
-def _detach_kwargs() -> dict[str, object]:
+class _DetachKwargs(TypedDict, total=False):
+    """The ``Popen`` keywords that detach a child, spelled out one key per platform.
+
+    A ``dict[str, object]`` would say the same thing at runtime and nothing at all
+    to a type checker: splatting one into ``Popen`` makes every keyword it accepts
+    look like it might be receiving an ``object``, which is twenty errors from one
+    annotation. Naming the two keys costs a class and buys a checked call.
+
+    ``total=False`` because each platform returns exactly one of them.
+    """
+
+    creationflags: int
+    start_new_session: bool
+
+
+def _detach_kwargs() -> _DetachKwargs:
     """Popen arguments that outlive this process, per platform."""
     if sys.platform.startswith("win"):
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
