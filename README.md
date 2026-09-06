@@ -14,7 +14,7 @@ to how you work. You keep downloading zips; it does the rest.
 
 ```
 $ lambda-watcher watch
-lambda-watcher 0.1.0 — archiving into ~/.lambda-watcher
+lambda-watcher 0.1.1 — archiving into ~/.lambda-watcher
 watching ~/Downloads. Press Ctrl-C to stop.
                new  order-processor v0001  order-processor.zip — archived a new version
                new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 3 renamed, 52 vendored
