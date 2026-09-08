@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import GitMirrorConfig
-from .utils import LOG, matches_any, rmtree
+from .utils import LOG, matches_any, no_window_kwargs, rmtree
 
 
 class GitUnavailable(RuntimeError):
@@ -83,6 +83,7 @@ def _run(repo: Path, *args: str, check: bool = True, env_extra: dict[str, str] |
         text=True,
         env=_git_env(env_extra),
         timeout=300,
+        **no_window_kwargs(),
     )
     if check and proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")

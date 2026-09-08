@@ -7,9 +7,11 @@ import hashlib
 import logging
 import os
 import re
+import subprocess
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import TypedDict
 
 LOG = logging.getLogger("lambda_watcher")
 
@@ -360,6 +362,50 @@ def rmtree(path: Path) -> None:
 
     if path.exists():
         shutil.rmtree(path, onerror=_onerror)
+
+
+class NoWindowKwargs(TypedDict, total=False):
+    """The ``subprocess`` keyword that suppresses a child's console window.
+
+    A ``dict[str, int]`` would say the same thing at runtime and nothing at all
+    to a type checker: splatting one into ``subprocess.run`` makes every keyword
+    it accepts look like it might be receiving an ``int``. Naming the one key
+    costs a class and buys a checked call — the same trade, and the same shape,
+    as :class:`lambda_watcher.service._DetachKwargs`.
+
+    ``total=False`` because every platform but Windows contributes no keys.
+    """
+
+    creationflags: int
+
+
+def no_window_kwargs() -> NoWindowKwargs:
+    """``subprocess`` keywords that stop a child flashing a console window open.
+
+    On Windows a console program inherits its parent's console, and is handed a
+    brand new one when the parent has none. The watcher deliberately has none —
+    ``pythonw.exe``, ``DETACHED_PROCESS``, a hidden scheduled task; see
+    :func:`lambda_watcher.service.watch_argv` — so every ``git`` and
+    ``powershell`` it shells out to during an ingest opens a console window on
+    screen for as long as it runs. Archiving one new version fires five git
+    commands and a notification, so a single downloaded zip reads to the user as
+    a burst of black rectangles flickering over whatever they were doing.
+
+    ``CREATE_NO_WINDOW`` is what suppresses that. Capturing the child's output
+    does not: the console is allocated at process creation whatever the handles
+    later point at, which is why ``capture_output=True`` at every one of those
+    call sites never helped.
+
+    Empty on every other platform, since the flag is Windows-only, so callers
+    splat it unconditionally rather than branching on the platform themselves.
+
+    Only for children whose output is captured. A command that inherits the
+    user's terminal on purpose — :func:`lambda_watcher.gitmirror.passthrough`,
+    which backs ``lw git my-fn log`` — must *not* pass this: no window means no
+    pager and no colour for a command the user typed and is watching.
+    """
+    flag = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": flag} if flag else {}
 
 
 def setup_logging(level: str = "INFO", log_file: Path | None = None) -> logging.Logger:
