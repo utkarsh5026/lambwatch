@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 
-from .utils import LOG
+from .utils import LOG, no_window_kwargs
 
 
 def notify(title: str, message: str, enabled: bool = True) -> bool:
@@ -37,6 +37,7 @@ def notify(title: str, message: str, enabled: bool = True) -> bool:
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                 capture_output=True,
                 timeout=15,
+                **no_window_kwargs(),
             )
             return True
         if shutil.which("notify-send"):

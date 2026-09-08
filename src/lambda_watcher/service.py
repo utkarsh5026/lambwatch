@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from .config import Config
-from .utils import LOG
+from .utils import LOG, no_window_kwargs
 
 #: Identifiers registered with the OS. Changing either of these orphans the
 #: service someone already installed, so they are constants, not config.
@@ -120,6 +120,11 @@ def _python_for_service() -> str:
 
     A scheduled task pointed at ``python.exe`` flashes a console window at every
     logon; ``pythonw.exe`` is the same interpreter without one.
+
+    This settles the watcher's own window and nothing else. Having no console is
+    exactly what makes Windows give a *new* one to each ``git`` and
+    ``powershell`` the watcher then spawns, which is
+    :func:`lambda_watcher.utils.no_window_kwargs`' problem.
     """
     executable = Path(sys.executable)
     if sys.platform.startswith("win"):
@@ -157,7 +162,8 @@ def _run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[st
     LOG.debug("service: %s", " ".join(argv))
     try:
         proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=_TIMEOUT, check=False
+            argv, capture_output=True, text=True, timeout=_TIMEOUT, check=False,
+            **no_window_kwargs(),
         )
     except FileNotFoundError as exc:
         raise ServiceError(f"{argv[0]} is not installed") from exc
@@ -628,6 +634,9 @@ class _DetachKwargs(TypedDict, total=False):
     annotation. Naming the two keys costs a class and buys a checked call.
 
     ``total=False`` because each platform returns exactly one of them.
+
+    :class:`lambda_watcher.utils.NoWindowKwargs` is the same trick for the
+    keyword that keeps a *captured* child from opening a console window.
     """
 
     creationflags: int
