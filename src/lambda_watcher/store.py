@@ -33,8 +33,11 @@ from .config import Config
 from .utils import LOG, rmtree, short_hash
 
 
-#: Where the mirror used to sit, inside the function directory. Both spellings
-#: are migrated: ``git/`` shipped, ``repo/`` was a brief step on the way here.
+#: back-compat: where the mirror used to sit, inside the function directory.
+#: Both spellings are migrated by :meth:`Store.repo_dir`: ``git/`` shipped,
+#: ``repo/`` was a brief step on the way here. Goes when no archive written
+#: before the move to ``repos/<slug>/`` can still be opened, which for a tool
+#: people leave running unattended is not a date anyone can name.
 LEGACY_REPO_DIRNAMES = ("git", "repo")
 
 
@@ -55,7 +58,13 @@ def posix_stored_dir(stored_dir: str) -> str:
     :meth:`Store.version_dirname`'s ``NNNN-`` plus hex, so no segment can
     legitimately contain a backslash. Written by :meth:`Store.relative`, read by
     :meth:`Store.resolve_version_dir`.
+
+    Goes when no index written by a release that stored the platform's own
+    separator can still be in use — so, in practice, it stays.
     """
+    # back-compat: an index written on Windows before `Store.relative` wrote
+    # posix. Drop this and such an archive resolves no version at all: the diff
+    # still prints, with no lines in it and every file blamed for its encoding.
     return stored_dir.replace("\\", "/")
 
 
@@ -129,6 +138,10 @@ class Store:
         repo = self.cfg.repos_dir / slug
         if repo.exists():
             return repo
+        # back-compat: relocate a mirror an older release left inside the
+        # function directory. Without this the mirror reads as missing, and
+        # `lw open`, `lw git` and `lw diff --mirror` all report there is no
+        # history to show for a function that has one.
         for name in LEGACY_REPO_DIRNAMES:
             legacy = self.function_dir(slug) / name
             if not (legacy / ".git").is_dir():

@@ -195,6 +195,8 @@ def _stored_dirname(stored_dir: str) -> str:
     where ``Path(...).name`` on Linux returns the whole backslash-joined string
     instead of the directory name, and the caller then builds a path to nothing.
     """
+    # back-compat: `posix_stored_dir` is the whole point of this helper existing
+    # rather than callers reaching for `Path(...).name` themselves.
     return PurePosixPath(posix_stored_dir(stored_dir)).name
 
 
@@ -1143,8 +1145,8 @@ def rename(
         if new_dir.exists():
             _fail(f"{new_dir} already exists on disk; move it aside first")
         old_dir.rename(new_dir)
-        # Re-point the index by rebuilding each path from where the directory
-        # now is, rather than by patching the stored string. A
+        # back-compat: re-point the index by rebuilding each path from where the
+        # directory now is, rather than by patching the stored string. A
         # `functions/<old slug>/` replacement silently matched nothing in an
         # archive an older release wrote on Windows, where the separator is a
         # backslash — and a version left pointing at the pre-rename path reads

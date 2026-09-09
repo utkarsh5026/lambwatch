@@ -104,6 +104,50 @@ beside `ruff check`, so this is a gate rather than an aspiration. It is stdlib-o
 paths, so `python tools/check_docstrings.py src/lambda_watcher/db.py` checks one file. `@overload`
 stubs are its only exemption — the docstring belongs on the implementation underneath.
 
+## The archive outlives the code that wrote it
+
+**Anything an older release wrote must still read correctly, with no migration step asked of the
+user.** People install this, forget about it, and come back months later; what is on their disk is
+the asset, and whichever version of the tool is installed over it is an implementation detail. A
+change that makes `lw diff` stop working on versions archived last spring is a broken change,
+however good it is on a fresh archive.
+
+- **Read every shape, write the current one.** Old manifests still reindex, old index rows still
+  resolve, old directory layouts move themselves on first access. `Store.repo_dir` relocates a
+  mirror it finds at `functions/<slug>/git/`; `store.posix_stored_dir` translates the backslash
+  paths an older release wrote on Windows. Neither asks the user to do anything.
+- **Heal on read rather than requiring a rebuild.** `lw reindex` rebuilds everything from the
+  manifests, but *needing* it is the bug — it is the recovery command, not the upgrade step.
+  Normalise the old value where it is read and the archive repairs itself on the next command.
+- **Absent means empty, not fatal.** `reindex._insert` defaults every manifest section it does not
+  find and falls back to the directory name for a missing sequence number, so one version written
+  by an older release cannot fail a whole rebuild.
+- **These bugs are silent, so the test has to build the old shape.** Nothing raises when the index
+  points somewhere that no longer resolves — you get a diff with no lines in it, or a file
+  labelled as though its bytes were the problem. Write the backslashes, create the legacy
+  directory, then assert on the answer; "it did not crash" tests nothing here.
+- **When a shape genuinely has to break, bump the schema and say so.** `db.SCHEMA_VERSION` and
+  `analysis.MANIFEST_SCHEMA` version separately, and the manifest is the breaking one — see
+  [Two independent schema versions](#two-independent-schema-versions).
+
+**Mark the code that exists for this, or someone will delete it as dead.** Every accommodation
+carries a `back-compat:` comment on the block itself, so `grep -rn "back-compat:" src/` is the
+whole list and nobody tidies one away without meeting it first:
+
+```python
+# back-compat: the mirror used to sit inside the function directory. Moving one
+# on first access is what lets an archive from an older release keep working
+# without a reindex — drop this and those mirrors read as missing.
+for name in LEGACY_REPO_DIRNAMES:
+```
+
+The comment is the flag; the docstring carries the explanation, in the ordinary prose the rest of
+the codebase uses. Between them a reader should learn three things without opening a git log:
+**what old shape** is being accommodated, **what breaks** without it, and **what would let it go**.
+That last one is rarely a version number — for a tool people leave running unattended it is
+usually "not while any archive written before this can still be opened", which is closer to never.
+Write that down rather than leaving a `TODO` nobody can evaluate.
+
 ## Architecture
 
 A zip lands in Downloads → it becomes version *N* of some Lambda function, archived on disk,
@@ -158,7 +202,8 @@ whole `BEGIN…COMMIT`. WAL mode lets readers work meanwhile. Preserve this: don
 ### Two independent schema versions
 
 `db.SCHEMA_VERSION` (SQLite layout) and `analysis.MANIFEST_SCHEMA` (on-disk manifest format) version
-separately. Changing the manifest shape is the breaking one — old manifests must still reindex.
+separately. Changing the manifest shape is the breaking one — old manifests must still reindex, per
+[The archive outlives the code that wrote it](#the-archive-outlives-the-code-that-wrote-it).
 
 ## Conventions and constraints
 

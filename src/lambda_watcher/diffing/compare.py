@@ -38,7 +38,15 @@ class FileRecord:
 
     @classmethod
     def from_row(cls, row: Any) -> FileRecord:
-        """Build a record from an index row, filling in defaults for null columns."""
+        """Build a record from an index row, filling in defaults for null columns.
+
+        The defaults are not decoration: a row reindexed from a manifest written
+        before ``lang`` and ``mode`` were recorded has NULL in those columns, and
+        the diff would rather call the file ``text`` at 644 than fail on it.
+        """
+        # back-compat: `or "text"` / `or 0o644` cover columns an older manifest
+        # cannot fill. Drop them and reindexing an old archive builds rows that
+        # crash the diff instead of one that is merely vaguer than it could be.
         return cls(
             path=row["path"], size=int(row["size"]), sha256=row["sha256"],
             is_text=bool(row["is_text"]), is_vendor=bool(row["is_vendor"]),

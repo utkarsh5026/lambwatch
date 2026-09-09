@@ -95,6 +95,10 @@ def _insert(db: Database, store: Store, function_id: int, manifest: dict[str, An
     with no recorded sequence number falls back to the numeric prefix of its
     directory name, which is where the sequence came from in the first place.
     """
+    # back-compat: every section is fetched with a default rather than indexed,
+    # so a manifest written before that section existed rebuilds as a version
+    # missing one facet instead of raising and costing the whole archive its
+    # index. Each analyser added since shipped is one more reason this stays.
     version_meta = manifest.get("version") or {}
     source = manifest.get("source") or {}
     runtime = manifest.get("runtime") or {}
@@ -103,7 +107,10 @@ def _insert(db: Database, store: Store, function_id: int, manifest: dict[str, An
 
     seq = int(version_meta.get("seq") or 0)
     if not seq:
-        # Fall back to the numeric prefix of the directory name.
+        # back-compat: a manifest from before the sequence number was recorded
+        # in it. The number is still in the directory name it was used to build
+        # (`0007-a1b2c3d4`), so recover it there rather than skipping the
+        # version and silently rebuilding a shorter history than the archive has.
         seq = int(version_dir.name.split("-")[0])
 
     with db.transaction():
