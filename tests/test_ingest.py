@@ -199,3 +199,33 @@ def test_downloads_at_different_refs_group_into_one_project(ingestor: Ingestor, 
     second = ingestor.ingest(make_zip("myrepo-1.3.0.zip", {"myrepo-1.3.0/app.py": PY_V2}))
     assert (first.function_name, first.seq) == ("myrepo", 1)
     assert (second.function_name, second.seq) == ("myrepo", 2)
+
+
+# ------------------------------------------- the index has to outlive the machine
+# `versions.dir` is stored relative to the archive root so the whole archive can be
+# copied elsewhere. That only works if the separator is one every platform reads:
+# Windows resolves `functions/fn/versions/0001-a1b2c3d4` perfectly well, while Linux
+# and macOS read `functions\fn\versions\0001-a1b2c3d4` as one oddly-named file and
+# find no version at all.
+def test_the_stored_version_dir_is_posix_on_every_platform(ingestor: Ingestor, make_zip, db):
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    row = db.list_versions(int(db.get_function("fn")["id"]))[0]
+    assert "\\" not in row["dir"]
+    assert row["dir"].startswith("functions/fn/versions/")
+
+
+def test_a_version_dir_written_on_windows_still_resolves(cfg, db, ingestor: Ingestor, make_zip):
+    """An archive an older release wrote on Windows, opened anywhere else."""
+    from lambda_watcher.store import Store
+
+    result = ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    row = db.list_versions(int(db.get_function("fn")["id"]))[0]
+    db.conn.execute(
+        "UPDATE versions SET dir = ? WHERE id = ?",
+        (row["dir"].replace("/", "\\"), row["id"]),
+    )
+    reread = db.list_versions(int(db.get_function("fn")["id"]))[0]
+
+    resolved = Store(cfg).resolve_version_dir(reread["dir"])
+    assert resolved == result.version_dir
+    assert (resolved / "code" / "lambda_function.py").is_file()

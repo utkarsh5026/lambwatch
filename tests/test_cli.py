@@ -547,3 +547,50 @@ def test_commands_leave_no_open_database_handles(archived: Path):
         cli_result = _run(*args)
         assert cli_result.exit_code == 0
         assert not cli._OPEN_DBS, f"`{' '.join(args)}` left the index open"
+
+
+# ------------------------------------------- an archive that came from another machine
+# Everything below is one bug seen from two sides: `versions.dir` used to be stored
+# with the platform's own separator, so an index written on Windows named nothing at
+# all anywhere else. The diff still printed - the index knows which files changed -
+# but with no line in it, and every file labelled as though its bytes were the
+# problem. `lw rename` had the same crack: it patched the stored path as a string
+# and the `functions/<slug>/` it looked for was never there to be replaced.
+def _windowsify(archive: Path) -> list[str]:
+    """Rewrite every stored version dir the way an older release on Windows would."""
+    import sqlite3
+
+    conn = sqlite3.connect(archive / "index.db")
+    with conn:
+        for vid, stored in conn.execute("SELECT id, dir FROM versions").fetchall():
+            conn.execute("UPDATE versions SET dir = ? WHERE id = ?",
+                         (stored.replace("/", "\\"), vid))
+        dirs = [row[0] for row in conn.execute("SELECT dir FROM versions")]
+    conn.close()
+    return dirs
+
+
+def test_an_index_written_on_windows_still_diffs_here(archived: Path):
+    assert all("\\" in d for d in _windowsify(archived))
+    output = _run("diff", "order-processor").output
+    assert "QUEUE_URL" in output                       # the index half, which never broke
+    assert "sqs.send_message" in output                # the line diff, which did
+    assert "missing from the archive" not in output
+
+
+def test_rename_repoints_an_index_written_on_windows(archived: Path):
+    _windowsify(archived)
+    _run("rename", "order-processor", "OrderProcessorProd")
+    assert (archived / "functions" / "OrderProcessorProd").exists()
+    output = _run("diff", "OrderProcessorProd").output
+    assert "sqs.send_message" in output
+    assert "missing from the archive" not in output
+
+
+def test_a_deleted_version_directory_says_what_to_type(archived: Path):
+    """The archive really is incomplete — so say so, and name the command that fixes it."""
+    for version_dir in (archived / "functions" / "order-processor" / "versions").glob("0001-*"):
+        rmtree(version_dir / "code")
+    result = _run("diff", "order-processor")
+    assert "missing from the archive" in result.output
+    assert "lw reindex" in result.output

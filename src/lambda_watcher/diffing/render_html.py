@@ -482,6 +482,12 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
             # check.
             note += (' Indentation, line endings or blank lines only — '
                      '<code>lw diff --whitespace</code> shows it anyway.')
+        elif change.missing:
+            # The one reason here that is not about the file: nothing is wrong
+            # with it, the archive just does not have it where the index says.
+            note += (' The index lists this file but the version directory does not '
+                     'hold it — <code>lw reindex</code> rebuilds the index from what '
+                     'is on disk.')
         parts.append(f'<div class="note">{note}</div>')
 
     parts.append("</details>")

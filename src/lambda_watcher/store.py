@@ -38,6 +38,27 @@ from .utils import LOG, rmtree, short_hash
 LEGACY_REPO_DIRNAMES = ("git", "repo")
 
 
+def posix_stored_dir(stored_dir: str) -> str:
+    """A stored version-directory path with its separators made posix.
+
+    ``functions\\order-processor\\versions\\0001-a1b2c3d4`` →
+    ``functions/order-processor/versions/0001-a1b2c3d4``. Releases before this
+    one built the value with :func:`str` on a :class:`~pathlib.Path`, so an
+    archive first written on Windows holds backslashes — four directories there,
+    one oddly-named file anywhere else. Reading such an archive on Linux or macOS
+    finds no version directory at all, and every file in every diff comes back
+    missing.
+
+    The translation is unambiguous rather than a guess: these paths are built
+    from ``functions/``, a :func:`~lambda_watcher.utils.slugify` output (only
+    ``A-Za-z0-9._-`` survives it), ``versions/`` and
+    :meth:`Store.version_dirname`'s ``NNNN-`` plus hex, so no segment can
+    legitimately contain a backslash. Written by :meth:`Store.relative`, read by
+    :meth:`Store.resolve_version_dir`.
+    """
+    return stored_dir.replace("\\", "/")
+
+
 @dataclass
 class VersionPaths:
     """The three paths that make up one archived version directory.
@@ -136,18 +157,32 @@ class Store:
         return VersionPaths(self.versions_dir(slug) / self.version_dirname(seq, tree_hash))
 
     def resolve_version_dir(self, stored_dir: str) -> Path:
-        """Version dirs are stored relative to the root so the store can move."""
-        path = Path(stored_dir)
+        """Version dirs are stored relative to the root so the store can move.
+
+        Separators are normalised on the way in by :func:`posix_stored_dir`, so
+        an archive an older release wrote on Windows still resolves after it is
+        copied to another machine — without that, every version reads as missing
+        and every file in a diff comes back unreadable.
+        """
+        path = Path(posix_stored_dir(stored_dir))
         return path if path.is_absolute() else self.cfg.root / path
 
     def relative(self, path: Path) -> str:
         """A path rewritten relative to the archive root, for storing and display.
 
+        Posix-separated on every platform — ``functions/order-processor/versions/
+        0001-a1b2c3d4``, never ``functions\\order-processor\\...`` — because this
+        is what goes into ``index.db`` and into ``manifest.json``, and both are
+        meant to survive the archive being copied to another machine. Windows
+        reads a ``/``-separated path perfectly well; Linux and macOS do not read
+        a ``\\``-separated one at all. :func:`posix_stored_dir` translates what
+        earlier releases already wrote.
+
         Falls back to the absolute path when it lies outside the root, which is
         better than raising in the middle of writing a manifest.
         """
         try:
-            return str(path.relative_to(self.cfg.root))
+            return path.relative_to(self.cfg.root).as_posix()
         except ValueError:
             return str(path)
 

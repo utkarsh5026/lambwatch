@@ -11,7 +11,7 @@ import sys
 import webbrowser
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NoReturn, Optional
 
 import typer
@@ -36,7 +36,7 @@ from .service import (
     install_service,
     stop_service,
 )
-from .store import Store
+from .store import Store, posix_stored_dir
 from .utils import format_ts, human_size, relative_ts, rmtree, setup_logging, slugify
 
 #: Index connections opened by the running command; see `_close_open_dbs`.
@@ -187,6 +187,17 @@ def _version_or_fail(db: Database, function_id: int, seq: int):
     return row
 
 
+def _stored_dirname(stored_dir: str) -> str:
+    """The last segment of a version's stored path: ``0007-a1b2c3d4``.
+
+    Goes through :func:`~lambda_watcher.store.posix_stored_dir` first, so it
+    reads the same answer out of a value an older release wrote on Windows —
+    where ``Path(...).name`` on Linux returns the whole backslash-joined string
+    instead of the directory name, and the caller then builds a path to nothing.
+    """
+    return PurePosixPath(posix_stored_dir(stored_dir)).name
+
+
 def _build_diff(db: Database, store: Store, cfg: Config, function_row, a_seq: int, b_seq: int,
                 include_vendor: bool | None, compute_diffs: bool = True):
     """Resolve two versions and build the diff between them.
@@ -194,7 +205,10 @@ def _build_diff(db: Database, store: Store, cfg: Config, function_row, a_seq: in
     Warns, rather than fails, when a version's extracted code is missing from
     disk: the index still knows what changed at the file level, so the summary
     and dependency layers are worth printing even though the line diffs come out
-    empty. Deleting an archive directory by hand is the usual cause.
+    empty. Deleting an archive directory by hand is one cause; an index pointing
+    somewhere the directory no longer is, after the archive was moved or copied
+    from another machine, is the other — which is why the warning names
+    ``lw reindex``, the command that rebuilds the index from what is on disk.
     """
     a = _version_or_fail(db, function_row["id"], a_seq)
     b = _version_or_fail(db, function_row["id"], b_seq)
@@ -203,7 +217,8 @@ def _build_diff(db: Database, store: Store, cfg: Config, function_row, a_seq: in
         if not path.exists():
             err_console.print(
                 f"[yellow]warning:[/yellow] code for v{seq:04d} is missing at {path}; "
-                "line diffs for it will be empty"
+                "line diffs for it will be empty. If the archive was moved or copied "
+                "here, `lw reindex` re-points the index at what is on disk."
             )
     return diff_from_index(db, store, cfg.diff, function_row["name"], a, b,
                            include_vendor=include_vendor, compute_diffs=compute_diffs)
@@ -1128,8 +1143,15 @@ def rename(
         if new_dir.exists():
             _fail(f"{new_dir} already exists on disk; move it aside first")
         old_dir.rename(new_dir)
+        # Re-point the index by rebuilding each path from where the directory
+        # now is, rather than by patching the stored string. A
+        # `functions/<old slug>/` replacement silently matched nothing in an
+        # archive an older release wrote on Windows, where the separator is a
+        # backslash — and a version left pointing at the pre-rename path reads
+        # as missing from then on, which is a diff with no lines in it.
+        new_versions = store.versions_dir(new_slug)
         for version in db.list_versions(int(row["id"])):
-            updated = version["dir"].replace(f"functions/{old_slug}/", f"functions/{new_slug}/", 1)
+            updated = store.relative(new_versions / _stored_dirname(version["dir"]))
             db.conn.execute("UPDATE versions SET dir = ? WHERE id = ?", (updated, version["id"]))
     if old_slug != new_slug:
         # The mirror lives outside the function directory, so it does not move
@@ -1209,7 +1231,7 @@ def merge(
         stored = store.resolve_version_dir(version["dir"])
         if stored.exists():
             continue
-        candidate = dst_versions / Path(version["dir"]).name
+        candidate = dst_versions / _stored_dirname(version["dir"])
         if candidate.exists():
             db.conn.execute(
                 "UPDATE versions SET dir = ? WHERE id = ?",

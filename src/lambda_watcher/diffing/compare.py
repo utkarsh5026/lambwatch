@@ -56,8 +56,9 @@ class FileChange:
 
     ``diff_lines`` may be empty even for a real modification —
     ``skipped_reason`` then says why (binary, too large, ignored by config,
-    whitespace only), so the renderer can explain the absence rather than imply
-    nothing changed. Two of those absences are not refusals but better answers:
+    whitespace only, missing from the archive), so the renderer can explain the
+    absence rather than imply nothing changed. Two of those absences are not
+    refusals but better answers:
     a whitespace-only change is fully described by its label, and a file with no
     usable lines is described by ``word_edits`` instead. See :func:`_fill_diff`.
     """
@@ -87,6 +88,12 @@ class FileChange:
     #: The changed runs of a ``long_lines`` file, with enough text either side to
     #: place them. Empty for every ordinary file.
     word_edits: list[WordEdit] = field(default_factory=list)
+    #: True when the index lists the file but the archived version directory does
+    #: not hold it, so there was nothing to diff. Unlike every other reason a
+    #: hunk is absent, this one is not about the file at all — the archive is
+    #: incomplete, or the index is pointing at the wrong place — so the
+    #: renderers say what to do about it rather than only what happened.
+    missing: bool = False
 
     @property
     def is_vendor(self) -> bool:
@@ -146,6 +153,7 @@ class FileChange:
             "is_vendor": self.is_vendor,
             "whitespace_only": self.whitespace_only,
             "long_lines": self.long_lines,
+            "missing": self.missing,
             "word_edits": [e.as_dict() for e in self.word_edits],
         }
 
@@ -764,6 +772,21 @@ def _whitespace_key(text: str) -> tuple[str, ...]:
     return tuple(" ".join(line.split()) for line in text.splitlines() if line.strip())
 
 
+def _absent(root: Path, record: FileRecord | None) -> bool:
+    """True when the index lists this file but the archive no longer holds it.
+
+    :func:`~lambda_watcher.utils.read_text` answers None both for bytes that are
+    not text and for a file it could not open at all, and the second is by far
+    the likelier of the two here: the index is derived from disk, so a file it
+    lists was readable when it was written. A version directory that has been
+    deleted, moved, or restored under a path the index does not know about is
+    what actually produces it — see :meth:`lambda_watcher.store.Store.relative`.
+    Telling the reader "not decodable as text" for that sends them looking for an
+    encoding problem in a file that is simply not there.
+    """
+    return record is not None and not (root / record.path).is_file()
+
+
 def _fill_diff(change: FileChange, old_root: Path, new_root: Path, cfg: DiffConfig) -> None:
     """Work out what changed inside one file and write it onto the change.
 
@@ -792,7 +815,10 @@ def _fill_diff(change: FileChange, old_root: Path, new_root: Path, cfg: DiffConf
         Everything else, from :func:`difflib.unified_diff`.
 
     Before any of that, a file can be refused outright — binary, over
-    ``max_diff_file_kb``, or not decodable — and ``skipped_reason`` says which.
+    ``max_diff_file_kb``, not decodable, or missing from the archive — and
+    ``skipped_reason`` says which. The last of those is not a property of the
+    file's bytes but of the archive around it, so it is told apart by
+    :func:`_absent` rather than lumped in with the encodings.
     Line counts stay at zero on every route but the last: the counts describe a
     hunk, and where there is no hunk ``+3/-3`` is the noise the route exists to
     remove.
@@ -813,7 +839,10 @@ def _fill_diff(change: FileChange, old_root: Path, new_root: Path, cfg: DiffConf
     old_text = read_text(old_root / old.path) if old else ""
     new_text = read_text(new_root / new.path) if new else ""
     if old_text is None or new_text is None:
-        change.skipped_reason = "not decodable as text"
+        change.missing = _absent(old_root, old) or _absent(new_root, new)
+        change.skipped_reason = (
+            "missing from the archive" if change.missing else "not decodable as text"
+        )
         return
 
     if old_text and new_text and old_text != new_text:
