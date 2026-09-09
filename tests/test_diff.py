@@ -706,3 +706,48 @@ def test_the_html_report_shows_the_changed_runs(cfg, db, ingestor: Ingestor, mak
     assert "diffed by word" in html
     assert "lw diff --whitespace" in html          # every note names the way out
     assert '<div class="diff">' not in html        # neither file got a line table
+
+
+# ------------------------------------------- an absent file is not an encoding problem
+# `read_text` answers None both for bytes that are not text and for a file it could
+# not open, and the diff used to call every one of them "not decodable as text". The
+# index is derived from disk, so in practice that message only ever meant the file
+# was gone - and it sent the reader hunting for an encoding that was never wrong.
+def test_a_file_the_archive_no_longer_holds_is_named_missing(cfg, db, ingestor: Ingestor,
+                                                             make_zip):
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V2}))
+
+    store = Store(cfg)
+    first = db.get_version(int(db.get_function("fn")["id"]), 1)
+    (store.resolve_version_dir(first["dir"]) / "code" / "lambda_function.py").unlink()
+
+    change = next(c for c in _diff(cfg, db, ingestor).files if c.path == "lambda_function.py")
+    assert change.missing
+    assert change.skipped_reason == "missing from the archive"
+    assert change.line_count_note == "missing from the archive"
+    assert not change.diff_lines
+
+
+def test_a_readable_file_is_never_reported_as_missing(cfg, db, ingestor: Ingestor, make_zip):
+    """The other half of the pair: a file that is there still diffs as it always did."""
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V2}))
+
+    change = next(c for c in _diff(cfg, db, ingestor).files if c.path == "lambda_function.py")
+    assert not change.missing
+    assert change.skipped_reason is None
+    assert change.diff_lines
+
+
+def test_the_missing_file_is_explained_in_the_html_report(cfg, db, ingestor: Ingestor, make_zip):
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V2}))
+
+    store = Store(cfg)
+    first = db.get_version(int(db.get_function("fn")["id"]), 1)
+    (store.resolve_version_dir(first["dir"]) / "code" / "lambda_function.py").unlink()
+
+    html = render_html(_diff(cfg, db, ingestor))
+    assert "missing from the archive" in html
+    assert "lw reindex" in html
