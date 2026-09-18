@@ -54,7 +54,7 @@ Then you review:
 lw diff order-processor                    # last two versions, in the terminal
 lw diff order-processor --from 2 --to 10   # any two versions
 lw diff order-processor --html --open      # a shareable HTML report
-lw report order-processor                  # the whole history, browsable
+lw report order-processor                  # the whole history, in your browser
 lw open order-processor                    # the whole archive, in your editor
 lw git order-processor log -p              # or just use git
 ```
@@ -229,7 +229,7 @@ the manual recipes.
 | `versions FN` | Every archived version of one function. |
 | `show FN [V]` | Runtime, handler, dependencies, env vars, services and findings for one version. `--files`, `--json`. |
 | `diff FN` | Compare two versions. Defaults to the last two. `--from`/`--to`, `--html`, `--open`, `--vendor`, `--whitespace`, `--no-patch`, `--json`. |
-| `report FN` | Build a browsable HTML history: an index plus a diff for every step. |
+| `report FN` | Build a browsable HTML history: an index plus a diff for every step, and open it in your browser. `--no-open` writes it without opening, `--limit`, `--vendor`. |
 | `export FN [V]` | Get a version back out as a deployable zip (`--zip`) or a plain folder (`--tree`). |
 | `open FN [V]` | Open the function's mirror in your editor — every version in one folder, with history. Name a version to open just its files. |
 | `git FN ...` | Run git inside that function's mirror repo: `lw git order-processor log --oneline`. |
@@ -325,6 +325,10 @@ naming:
 diff:
   ignore_vendor: true        # hide vendored dependency files in diffs
   context_lines: 3
+
+report:
+  auto_diff: true            # render each new version's comparison as it is archived
+  open_in_browser: true      # `lw report` opens the page it just built
 ```
 
 Set `LAMBDA_WATCHER_HOME` to relocate the whole archive, or

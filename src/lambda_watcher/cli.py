@@ -244,6 +244,80 @@ def _open_path(path: Path) -> None:
         err_console.print(f"[yellow]could not open {path}: {exc}[/yellow]")
 
 
+def _manual_open_command(path: Path) -> str:
+    """What to type to open a file by hand here: ``xdg-open ~/report/index.html``.
+
+    The line a reader is given when no browser could be launched for them, so
+    it has to be the spelling their shell actually takes — `open` on macOS,
+    `start` on Windows, `xdg-open` everywhere else.
+    """
+    if sys.platform == "darwin":
+        return f"open {shlex.quote(str(path))}"
+    if sys.platform.startswith("win"):
+        return f'start "" "{path}"'
+    return f"xdg-open {shlex.quote(str(path))}"
+
+
+def _browser_is_reachable() -> bool:
+    """Whether launching a browser from here would put a page in front of a person.
+
+    Three things have to hold before a page is worth opening unasked. The
+    reader has to be at a terminal: a run whose output is redirected into a
+    file or a CI log is a script, and a script that grows browser windows is a
+    bug. There has to be somewhere to draw it — over SSH there is no display,
+    and :mod:`webbrowser` falls back there to whatever console browser is
+    installed, which takes over the terminal the reader is working in. And
+    ``LAMBDA_WATCHER_NO_BROWSER`` turns the whole thing off for anyone whose
+    setup fools the two guesses above.
+
+    A false answer is never an error: the page is written either way and its
+    path is already on screen. See :func:`_open_in_browser`, which acts on it.
+    """
+    if os.environ.get("LAMBDA_WATCHER_NO_BROWSER"):
+        return False
+    if not console.is_terminal:
+        return False
+    if sys.platform == "darwin" or sys.platform.startswith("win"):
+        return True
+    # A desktop session, X forwarding, WSL's handoff to Windows, or a $BROWSER
+    # the reader set themselves: any one of them can render the page.
+    return any(os.environ.get(name) for name in
+               ("DISPLAY", "WAYLAND_DISPLAY", "WSL_DISTRO_NAME", "BROWSER"))
+
+
+def _open_in_browser(path: Path, *, asked: bool = False) -> bool:
+    """Show a written HTML page in the reader's browser, and say what happened.
+
+    Returns whether a browser was launched. Opening is the last step of a
+    command that has already done its work, so nothing here fails it — a
+    machine with no browser on it still wrote the report, and the path is on
+    the line above.
+
+    ``asked`` separates the reader typing ``--open`` from a page opening
+    because that is the default. An explicit ask that cannot be honoured is
+    answered with the command to run by hand; the default one stays quiet,
+    because a headless box printing "no browser" after every report is noise
+    about something nobody requested.
+    """
+    if not _browser_is_reachable():
+        if asked:
+            err_console.print(
+                f"[yellow]nothing here can open a browser — try: {_manual_open_command(path)}[/yellow]"
+            )
+        return False
+    try:
+        launched = webbrowser.open(path.resolve().as_uri())
+    except (OSError, webbrowser.Error):
+        launched = False
+    if launched:
+        console.print("[dim]opened it in your browser[/dim]")
+    else:
+        err_console.print(
+            f"[yellow]could not open a browser — try: {_manual_open_command(path)}[/yellow]"
+        )
+    return launched
+
+
 #: Editors that take a folder as their argument, in the order they are tried.
 #: Everything here is VS Code or a fork of it except the last two, so `--reuse`
 #: (VS Code's `-r`) applies to all but those.
@@ -1053,7 +1127,7 @@ def diff(
         write_html(result, target)
         console.print(f"[green]wrote[/green] {target}")
         if open_report:
-            webbrowser.open(target.resolve().as_uri())
+            _open_in_browser(target, asked=True)
         return
 
     render_diff(console, result, show_diffs=not no_patch)
@@ -1063,11 +1137,22 @@ def diff(
 def report(
     function: str = typer.Argument(..., autocompletion=_complete_function),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Directory for the report."),
-    open_report: bool = typer.Option(False, "--open", help="Open the index in your browser."),
+    open_report: Optional[bool] = typer.Option(
+        None, "--open/--no-open",
+        help="Open the finished index in your browser. On by default, at a terminal.",
+    ),
     limit: int = typer.Option(25, "--limit", "-n", help="How many recent versions to include."),
     vendor: bool = typer.Option(False, "--vendor", help="Include vendored files in the diffs."),
 ) -> None:
-    """Build a browsable HTML history: every version plus a diff for each step."""
+    """Build a browsable HTML history: every version plus a diff for each step.
+
+    The index opens in your browser as soon as it is written, because the
+    report is the thing worth reading and the path to it is not — a command
+    that names a file and stops leaves you to go and find it. `--no-open`
+    writes the pages and stops there, as does `report.open_in_browser: false`
+    in the config, and a run with nowhere to draw a window — over SSH, or with
+    its output redirected — opens nothing either way.
+    """
     cfg = _cfg()
     db = _open_db(cfg)
     store = Store(cfg)
@@ -1110,8 +1195,12 @@ def report(
     index = target_dir / "index.html"
     index.write_text(render_timeline(row["name"], entries), encoding="utf-8")
     console.print(f"[green]wrote[/green] {index} [dim]({len(entries)} versions)[/dim]")
-    if open_report:
-        webbrowser.open(index.resolve().as_uri())
+    # The flag is three-valued on purpose: None is "nobody said", which is the
+    # only case the config gets to answer, and it is also what tells the opener
+    # whether to explain itself when there is no browser to be had.
+    wants_browser = cfg.report.open_in_browser if open_report is None else open_report
+    if wants_browser:
+        _open_in_browser(index, asked=open_report is not None)
 
 
 # ---------------------------------------------------------------- editing

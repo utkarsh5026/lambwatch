@@ -248,6 +248,10 @@ class ReportConfig:
     auto_diff: bool = True
     #: Include vendored dependency files in those automatic diffs.
     include_vendor: bool = False
+    #: Show the page `lw report` has just built, rather than only naming it.
+    #: A run with nowhere to draw a window — over SSH, or with its output
+    #: redirected — opens nothing either way; see `cli._browser_is_reachable`.
+    open_in_browser: bool = True
 
 
 @dataclass

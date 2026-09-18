@@ -9,6 +9,7 @@ from importlib import reload
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from lambda_watcher import cli
@@ -233,6 +234,129 @@ def test_report_builds_a_browsable_history(archived: Path):
     index = archived / "reports" / "order-processor" / "index.html"
     assert index.exists()
     assert (archived / "reports" / "order-processor" / "v0001-v0002.html").exists()
+
+
+def _browser(monkeypatch, *, reachable: bool = True, launches: bool = True) -> list[str]:
+    """Record the URL `report` hands over instead of opening a real browser.
+
+    The environment check is stubbed alongside it because the suite itself runs
+    with its output captured, which is exactly the case
+    `cli._browser_is_reachable` exists to refuse — tested on its own below.
+    """
+    opened: list[str] = []
+
+    def fake_open(url: str) -> bool:
+        opened.append(url)
+        return launches
+
+    monkeypatch.setattr(cli, "_browser_is_reachable", lambda: reachable)
+    monkeypatch.setattr(cli.webbrowser, "open", fake_open)
+    return opened
+
+
+def test_report_opens_what_it_just_wrote(archived: Path, monkeypatch):
+    """The point of the command is the page, not the path to it."""
+    opened = _browser(monkeypatch)
+    result = _run("report", "order-processor")
+
+    index = archived / "reports" / "order-processor" / "index.html"
+    assert opened == [index.resolve().as_uri()]
+    assert "opened it in your browser" in result.output
+
+
+def test_report_no_open_writes_the_pages_and_stops(archived: Path, monkeypatch):
+    opened = _browser(monkeypatch)
+    _run("report", "order-processor", "--no-open")
+
+    assert not opened
+    assert (archived / "reports" / "order-processor" / "index.html").exists()
+
+
+def test_report_obeys_open_in_browser_in_the_config(archived: Path, tmp_path: Path, monkeypatch):
+    """The config answers only when the command line did not."""
+    opened = _browser(monkeypatch)
+    config = tmp_path / "quiet.yaml"
+    config.write_text("report:\n  open_in_browser: false\n", encoding="utf-8")
+
+    _run("--config", str(config), "report", "order-processor")
+    assert not opened
+
+    _run("--config", str(config), "report", "order-processor", "--open")
+    assert len(opened) == 1, "an explicit --open must outrank the config"
+
+
+def test_report_that_cannot_reach_a_browser_still_wrote_the_report(archived: Path, monkeypatch):
+    """A machine with no browser on it is not a failed report.
+
+    Nothing is said about it either, because the default asked for the browser
+    rather than the reader — a headless box announcing it after every run is
+    noise about something nobody requested.
+    """
+    opened = _browser(monkeypatch, reachable=False)
+    result = _run("report", "order-processor")
+
+    assert not opened
+    assert (archived / "reports" / "order-processor" / "index.html").exists()
+    assert "browser" not in result.output
+
+
+def test_report_open_on_a_machine_with_no_browser_names_the_way_round_it(archived: Path, monkeypatch):
+    """Typing --open and getting silence is the half-written message."""
+    _browser(monkeypatch, reachable=False)
+    result = _run("report", "order-processor", "--open")
+
+    assert "nothing here can open a browser" in result.output
+    hint = {"darwin": "open ", "win32": "start "}.get(sys.platform, "xdg-open ")
+    assert hint in result.output
+
+
+@pytest.mark.parametrize("failure", ["refused", "raised"])
+def test_a_browser_that_will_not_start_does_not_fail_the_report(archived: Path, monkeypatch, failure: str):
+    """Opening is the last step of work that already succeeded."""
+    opened = _browser(monkeypatch, launches=False)
+    if failure == "raised":
+        def boom(url: str) -> bool:
+            opened.append(url)
+            raise OSError("no such file or directory: firefox")
+
+        monkeypatch.setattr(cli.webbrowser, "open", boom)
+
+    result = _run("report", "order-processor")
+    assert opened, "the browser was never tried"
+    assert "could not open a browser" in result.output
+    assert (archived / "reports" / "order-processor" / "index.html").exists()
+
+
+def test_a_redirected_run_opens_nothing(monkeypatch):
+    """Output going to a file or a CI log is a script, not a reader.
+
+    A script that grows browser windows is the bug this guards against, and it
+    is why the demo builder in docs/examples can run the command at all.
+    """
+    monkeypatch.setattr(cli, "console", Console(force_terminal=True))
+    monkeypatch.delenv("LAMBDA_WATCHER_NO_BROWSER", raising=False)
+    monkeypatch.setenv("DISPLAY", ":0")
+    assert cli._browser_is_reachable()
+
+    monkeypatch.setattr(cli, "console", Console(force_terminal=False))
+    assert not cli._browser_is_reachable()
+
+
+@pytest.mark.skipif(sys.platform == "darwin" or sys.platform.startswith("win"),
+                    reason="only X11/Wayland/WSL advertise their display in the environment")
+def test_a_session_with_nowhere_to_draw_opens_nothing(monkeypatch):
+    """Over SSH, `webbrowser` reaches for lynx and takes over the terminal."""
+    monkeypatch.setattr(cli, "console", Console(force_terminal=True))
+    for name in ("DISPLAY", "WAYLAND_DISPLAY", "WSL_DISTRO_NAME", "BROWSER",
+                 "LAMBDA_WATCHER_NO_BROWSER"):
+        monkeypatch.delenv(name, raising=False)
+    assert not cli._browser_is_reachable()
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert cli._browser_is_reachable()
+
+    monkeypatch.setenv("LAMBDA_WATCHER_NO_BROWSER", "1")
+    assert not cli._browser_is_reachable(), "the env var has the last word"
 
 
 # A real executable, so `open` resolves it the way it resolves `code`; the

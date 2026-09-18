@@ -160,6 +160,11 @@ report:
   # a latest.html that always points at the newest comparison.
   auto_diff: true
   include_vendor: false
+  # `lw report` opens the page it has just built, because a report is a thing to
+  # look at. Set this false to have it print the path and stop. Either way a run
+  # with no desktop, or one whose output is redirected, opens nothing;
+  # LAMBDA_WATCHER_NO_BROWSER=1 turns it off for a single shell.
+  open_in_browser: true
 
 # What `lw open` launches on a folder. Left empty, it looks for VS Code and
 # friends on PATH. $LAMBDA_WATCHER_EDITOR overrides this.
