@@ -130,44 +130,52 @@ table.grid td.label { width: 210px; color: var(--muted); }
 .tok.removed { background: var(--del-bg); border-color: var(--del-gutter); color: var(--del-fg); }
 
 /* ---- toolbar --------------------------------------------------------- */
-.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;
-  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 5;
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
+  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 6;
   box-shadow: 0 1px 0 var(--border); }
 .toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; color: var(--faint); }
-.toolbar input[type=search] { flex: 1 1 220px; min-width: 140px; padding: 6px 10px; border-radius: 6px;
+.toolbar input[type=search] { flex: 1 1 240px; min-width: 150px; padding: 7px 11px; border-radius: 7px;
   border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px; }
-.toolbar input[type=search]:focus { outline: none; border-color: var(--accent); }
+.toolbar input[type=search]:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash); }
 .toolbar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px;
   align-items: center; cursor: pointer; user-select: none; }
-.toolbar button { padding: 6px 11px; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--muted); font-size: 13px; cursor: pointer; }
-.toolbar button:hover { border-color: var(--faint); color: var(--text); }
 
-/* ---- one file -------------------------------------------------------- */
-details.file { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+/* ---- the file list --------------------------------------------------- */
+/* One panel of rows rather than a stack of cards, because the list is an index
+   now: the diff it points at opens beside it instead of pushing the rest of
+   the list down the page. A row is a button, since that is what it does. */
+.files { border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
   background: var(--panel); }
-details.file[open] { background: var(--bg); }
-details.file > summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 10px;
-  align-items: center; list-style: none; font-size: 13px; border-radius: 7px; }
-details.file > summary::-webkit-details-marker { display: none; }
-details.file > summary:hover { background: var(--panel); }
-/* The header stays put while a long file scrolls past, so the path is still
-   readable eighty lines into its own diff. */
-details.file[open] > summary { position: sticky; top: var(--toolbar-h, 54px); z-index: 3;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border); border-radius: 7px 7px 0 0; }
-summary .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-summary .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.file { border-top: 1px solid var(--rule); }
+/* Transparent rather than absent so every row is the same height, whichever
+   one the filter left at the top. */
+.file:first-child, .file.first-shown { border-top-color: transparent; }
+.row { display: flex; gap: 10px; align-items: center; width: 100%; padding: 9px 14px;
+  font: inherit; color: var(--text); text-align: left; background: none; border: 0;
+  cursor: pointer; }
+.row:hover { background: var(--sunken); }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* The chevron points where the diff will appear: to the side, not downwards.
+   Drawn in CSS because a vendored diff runs to thousands of rows, and each one
+   would otherwise carry its own copy of the glyph. */
+.row::after { content: ""; flex: 0 0 auto; width: 6px; height: 6px; margin-left: 2px;
+  border: 1.6px solid var(--faint); border-left: 0; border-bottom: 0;
+  transform: rotate(45deg); transition: transform .15s ease, border-color .15s ease; }
+.row:hover::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
+.file.active .row { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
+.file.active .row::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
+.row .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.row .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 /* The tint hugs the changed part exactly — padding here would open a gap in
    the middle of a path and read as though the name contained a space. */
-summary .path .ren { background: var(--sunken); border-radius: 3px; }
-summary .path .was { color: var(--faint); }
-summary .stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
+.path .ren { background: var(--sunken); border-radius: 3px; }
+.path .was { color: var(--faint); }
+.stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
   display: flex; gap: 8px; align-items: baseline; color: var(--faint); }
 
 /* ---- the diff itself ------------------------------------------------- */
 .diff { overflow-x: auto; border-top: 1px solid var(--border); }
-details.file[open] > .diff { border-top: none; }
 .diff table { border-collapse: collapse; width: 100%; font-family: var(--mono);
   font-size: 12.5px; line-height: 1.5; }
 .diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
@@ -224,49 +232,273 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
 .moved-list { margin: 0; padding: 10px 16px 12px 34px; list-style: disc;
   color: var(--muted); font-size: 12px; line-height: 1.9; }
 .moved-list .hint { color: var(--faint); }
+/* ---- the sheet ------------------------------------------------------- */
+/* Where the diff lands when a row is clicked. Code wants width, and a block
+   that opened downwards spent the page's widest dimension on the file list it
+   had just pushed out of view; this keeps the list where it was, so the next
+   file is one click away rather than one scroll back.
+
+   A wide window docks the sheet and the page makes room beside it. A narrow
+   one slides it over the page with a scrim, because a laptop in portrait has
+   no room to dock and half a diff is worse than a covered list. */
+:root { --sheet-w: 760px; }
+.scrim { position: fixed; inset: 0; z-index: 30; background: rgba(8, 13, 20, .44);
+  opacity: 0; visibility: hidden; transition: opacity .26s ease, visibility 0s linear .26s; }
+body.sheet-open .scrim { opacity: 1; visibility: visible; transition: opacity .26s ease; }
+.sheet { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+  width: min(100%, var(--sheet-w)); display: flex; flex-direction: column;
+  background: var(--bg); border-left: 1px solid var(--border);
+  box-shadow: -24px 0 60px -30px rgba(6, 11, 18, .5);
+  /* `visibility` rather than `display`, so the sheet can animate out and still
+     leave nothing behind for the keyboard to land on while it is shut. It turns
+     visible on the same frame it is asked to — a transition would leave it
+     unfocusable for the length of the slide, which is exactly when the script
+     is moving focus into it — and back to hidden only once the slide is over. */
+  transform: translateX(100%); visibility: hidden;
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1), visibility 0s linear .26s; }
+body.sheet-open .sheet { transform: none; visibility: visible;
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1); }
+.sheet-head { padding: 12px 14px 11px; border-bottom: 1px solid var(--border);
+  background: var(--panel); display: flex; flex-direction: column; gap: 7px; }
+.sheet-bar { display: flex; align-items: center; gap: 10px; }
+.sheet-title { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.sheet-title .path { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sheet-title .p { font-family: var(--mono); font-size: 13px; font-weight: 600;
+  overflow-wrap: anywhere; }
+/* Wrapping rather than clipping: a file whose counts are a sentence — "missing
+   from the archive" — is exactly the one whose reader needs to read them. */
+.sheet-sub { display: flex; align-items: baseline; gap: 12px; min-height: 18px;
+  flex-wrap: wrap; color: var(--faint); font-size: 12px; }
+.sheet-sub .ver { margin-left: auto; font-family: var(--mono); white-space: nowrap; }
+.sheet-nav { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.sheet-nav .pos { color: var(--faint); font-size: 12px; padding: 0 3px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.iconbtn { display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid transparent;
+  background: none; color: var(--muted); cursor: pointer; }
+.iconbtn:hover:not(:disabled) { background: var(--sunken); border-color: var(--border);
+  color: var(--text); }
+.iconbtn:disabled { opacity: .3; cursor: default; }
+.iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.iconbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.iconbtn.close { margin-left: 5px; }
+.sheet-body { flex: 1; overflow: auto; overscroll-behavior: contain; }
+.sheet-body:focus { outline: none; }
+/* The panel's own top rule would double the header's. */
+.sheet-body > .body > :first-child { border-top: none; }
+/* One file wants sixty columns and the next wants two hundred, and which one
+   is on screen is not something the page can know — so the edge is draggable
+   wherever there is a pointer and room to dock. */
+.grip { position: absolute; left: 0; top: 0; bottom: 0; width: 11px; display: none;
+  cursor: col-resize; }
+.grip::before { content: ""; position: absolute; left: 4px; top: 50%; width: 3px; height: 44px;
+  margin-top: -22px; border-radius: 3px; background: var(--border); transition: background .15s; }
+.grip:hover::before, body.dragging .grip::before { background: var(--accent); }
+body.dragging { user-select: none; cursor: col-resize; }
+body.dragging, body.dragging .sheet { transition: none; }
+
+@media (min-width: 1280px) {
+  :root { --sheet-w: min(50vw, 960px); }
+  .scrim { display: none; }
+  .grip { display: block; }
+  body { transition: padding-right .26s cubic-bezier(.22, .61, .36, 1); }
+  body.sheet-open { padding-right: min(var(--sheet-w), 76vw); }
+}
+/* Nothing to dock into: the sheet is over the page, so the page stops scrolling
+   underneath it. */
+@media (max-width: 1279.98px) {
+  body.sheet-open { overflow: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body, .sheet, .scrim, .row::after { transition: none; }
+}
+/* On paper there is no clicking, so every diff is printed under its own row and
+   the chrome that only answers a pointer is left out. */
+@media print {
+  .toolbar, .scrim, .sheet-nav, .grip { display: none !important; }
+  .sheet { position: static; transform: none; visibility: visible; width: auto;
+    border-left: 0; box-shadow: none; }
+  body.sheet-open { padding-right: 0; overflow: visible; }
+  .file .body[hidden] { display: block; }
+}
 .hidden { display: none !important; }
 """
 
+#: What the page does once it is open: narrow the list, and move one file's diff
+#: into the sheet and back out again. Moving rather than copying is the whole
+#: design — the diff exists once, so the sheet cannot drift from the row, and
+#: closing it leaves the page exactly as it was rendered. One ``<script>`` at the
+#: end of the body, so everything it binds to is already parsed.
 JS = """
 (function () {
   var search = document.getElementById('filter');
   var vendorToggle = document.getElementById('vendor');
-  var files = Array.prototype.slice.call(document.querySelectorAll('details.file'));
+  var counter = document.getElementById('shown-count');
+  var files = Array.prototype.slice.call(document.querySelectorAll('.files .file'));
+  var scrim = document.getElementById('scrim');
+  var host = document.getElementById('sheet-body');
+  var titleBox = document.getElementById('sheet-title');
+  var statBox = document.getElementById('sheet-stat');
+  var posBox = document.getElementById('sheet-pos');
+  var prevBtn = document.getElementById('sheet-prev');
+  var nextBtn = document.getElementById('sheet-next');
+  var closeBtn = document.getElementById('sheet-close');
+  var grip = document.getElementById('sheet-grip');
+  var openFile = null;   // whose diff is sitting in the sheet right now
+  var opener = null;     // the row that put it there, to hand focus back to
+
+  function listed() {
+    return files.filter(function (el) { return !el.classList.contains('hidden'); });
+  }
+
+  function empty(node) {
+    while (node && node.firstChild) { node.removeChild(node.firstChild); }
+  }
+
+  // The sheet header says the same things the row does, so it is built from a
+  // copy of the row rather than from a second set of markup on every file.
+  function copyInto(node, source) {
+    empty(node);
+    if (node && source) { node.appendChild(source.cloneNode(true)); }
+  }
+
+  function position() {
+    var rows = listed();
+    var at = openFile ? rows.indexOf(openFile) : -1;
+    if (posBox) { posBox.textContent = at < 0 ? '' : (at + 1) + ' / ' + rows.length; }
+    if (prevBtn) { prevBtn.disabled = at <= 0; }
+    if (nextBtn) { nextBtn.disabled = at < 0 || at >= rows.length - 1; }
+  }
+
+  // The diff is moved into the sheet rather than copied, so this puts it back
+  // where it came from. One diff exists at a time, wherever it is showing.
+  function park() {
+    if (!openFile) { return; }
+    var body = host.firstElementChild;
+    if (body) { body.hidden = true; openFile.appendChild(body); }
+    openFile.classList.remove('active');
+    var row = openFile.querySelector('.row');
+    if (row) { row.setAttribute('aria-expanded', 'false'); }
+    openFile = null;
+  }
+
+  function show(file, takeFocus) {
+    var row = file && file.querySelector('.row');
+    if (!row || !host) { return; }
+    park();
+    openFile = file;
+    file.classList.add('active');
+    row.setAttribute('aria-expanded', 'true');
+    var body = file.querySelector('.body');
+    if (body) { body.hidden = false; host.appendChild(body); }
+    host.scrollTop = 0;
+    empty(titleBox);
+    ['.chip', '.path'].forEach(function (part) {
+      var found = row.querySelector(part);
+      if (found && titleBox) { titleBox.appendChild(found.cloneNode(true)); }
+    });
+    copyInto(statBox, row.querySelector('.stat-line'));
+    document.body.classList.add('sheet-open');
+    position();
+    if (takeFocus) { host.focus(); }
+  }
+
+  function close() {
+    park();
+    document.body.classList.remove('sheet-open');
+    empty(titleBox);
+    empty(statBox);
+    position();
+    if (opener) { opener.focus(); opener = null; }
+  }
+
+  function step(delta) {
+    var rows = listed();
+    var at = openFile ? rows.indexOf(openFile) : -1;
+    var next = at < 0 ? null : rows[at + delta];
+    if (next) {
+      // Focus stays on the button that is walking the list, so the next press
+      // lands on it too.
+      show(next, false);
+      opener = next.querySelector('.row');
+    }
+  }
 
   function apply() {
-    var term = (search.value || '').toLowerCase();
+    var term = (search ? search.value : '').toLowerCase();
     var showVendor = vendorToggle ? vendorToggle.checked : true;
     var shown = 0;
+    var total = 0;
+    var first = true;
     files.forEach(function (el) {
       var path = (el.getAttribute('data-path') || '').toLowerCase();
       var isVendor = el.getAttribute('data-vendor') === '1';
       var ok = (!term || path.indexOf(term) !== -1) && (showVendor || !isVendor);
+      // A move block stands for every file it folded up, so both halves of the
+      // count are sums of `data-files` rather than counts of rows.
+      var covers = parseInt(el.getAttribute('data-files') || '1', 10);
       el.classList.toggle('hidden', !ok);
-      if (ok) shown += parseInt(el.getAttribute('data-files') || '1', 10);
+      el.classList.toggle('first-shown', ok && first);
+      total += covers;
+      if (ok) { shown += covers; first = false; }
     });
-    var counter = document.getElementById('shown-count');
-    if (counter) counter.textContent = shown + ' of ' + files.length + ' files shown';
+    if (counter) { counter.textContent = shown + ' of ' + total + ' files shown'; }
+    // Leaving the sheet open on a file the filter just took off the list would
+    // show a diff with no row to close it from.
+    if (openFile && openFile.classList.contains('hidden')) { close(); } else { position(); }
   }
 
-  if (search) search.addEventListener('input', apply);
-  if (vendorToggle) vendorToggle.addEventListener('change', apply);
+  files.forEach(function (file) {
+    var row = file.querySelector('.row');
+    if (!row) { return; }
+    row.addEventListener('click', function () {
+      if (file === openFile) { close(); return; }
+      opener = row;
+      show(file, true);
+    });
+  });
 
-  var toolbar = document.querySelector('.toolbar');
-  function measure() {
-    if (!toolbar) return;
-    document.documentElement.style.setProperty('--toolbar-h', toolbar.offsetHeight + 'px');
+  if (search) { search.addEventListener('input', apply); }
+  if (vendorToggle) { vendorToggle.addEventListener('change', apply); }
+  if (closeBtn) { closeBtn.addEventListener('click', close); }
+  if (scrim) { scrim.addEventListener('click', close); }
+  if (prevBtn) { prevBtn.addEventListener('click', function () { step(-1); }); }
+  if (nextBtn) { nextBtn.addEventListener('click', function () { step(1); }); }
+
+  document.addEventListener('keydown', function (ev) {
+    if (!openFile || ev.ctrlKey || ev.metaKey || ev.altKey) { return; }
+    if (ev.key === 'Escape') { close(); return; }
+    var tag = (ev.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') { return; }
+    if (ev.key === 'j') { step(1); ev.preventDefault(); }
+    if (ev.key === 'k') { step(-1); ev.preventDefault(); }
+  });
+
+  if (grip && window.PointerEvent) {
+    grip.addEventListener('pointerdown', function (down) {
+      down.preventDefault();
+      grip.setPointerCapture(down.pointerId);
+      document.body.classList.add('dragging');
+      function drag(move) {
+        // Clamped so a drag can neither shut the sheet nor bury the list
+        // behind it, whichever direction it is thrown in.
+        var width = Math.min(Math.max(window.innerWidth - move.clientX, 380),
+                             Math.max(window.innerWidth - 320, 380));
+        document.documentElement.style.setProperty('--sheet-w', Math.round(width) + 'px');
+      }
+      function drop() {
+        document.body.classList.remove('dragging');
+        grip.removeEventListener('pointermove', drag);
+        grip.removeEventListener('pointerup', drop);
+        grip.removeEventListener('pointercancel', drop);
+      }
+      grip.addEventListener('pointermove', drag);
+      grip.addEventListener('pointerup', drop);
+      grip.addEventListener('pointercancel', drop);
+    });
   }
-  window.addEventListener('resize', measure);
-  measure();
 
-  var expand = document.getElementById('expand-all');
-  var collapse = document.getElementById('collapse-all');
-  if (expand) expand.addEventListener('click', function () {
-    files.forEach(function (f) { if (!f.classList.contains('hidden')) f.open = true; });
-  });
-  if (collapse) collapse.addEventListener('click', function () {
-    files.forEach(function (f) { f.open = false; });
-  });
   apply();
 })();
 """
@@ -392,8 +624,46 @@ def _row_code(row: _Row, lang: str, old: _Painted, new: _Painted) -> str:
     return highlight(row.text, lang)
 
 
+def _file_block(
+    *,
+    path_key: str,
+    chip_class: str,
+    chip_text: str,
+    icon: str,
+    title: str,
+    stat: str,
+    body: str,
+    is_vendor: bool,
+    files: int | None = None,
+) -> str:
+    """One row of the file list, carrying the diff the sheet opens when it is clicked.
+
+    The row is what the reader scans — kind, icon, path, counts — and ``body``
+    is what opens beside it. The body ships inside the row's own element rather
+    than in a second list keyed by path, so a block stays one self-contained
+    thing to filter, hide or print; the script moves that element into the sheet
+    and back out again, which is why no diff is ever on the page twice.
+
+    ``path_key`` is what the filter box matches on: a file's own path and the
+    one it was renamed from, or every member path of a move. ``files`` is how
+    many files the block is the only entry for, left off when that is one.
+    """
+    extra = f' data-files="{files}"' if files is not None else ""
+    return (
+        f'<article class="file" data-path="{_esc(path_key)}" '
+        f'data-vendor="{1 if is_vendor else 0}"{extra}>'
+        '<button class="row" type="button" aria-expanded="false" aria-controls="sheet">'
+        f'<span class="chip {_esc(chip_class)}">{_esc(chip_text)}</span>'
+        f'<span class="path">{icon}<span class="p">{title}</span></span>'
+        f'<span class="stat-line">{stat}</span>'
+        "</button>"
+        f'<div class="body" hidden>{body}</div>'
+        "</article>"
+    )
+
+
 def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | None = None) -> str:
-    """Render one file's change as a titled block with its diff table.
+    """Render one file's change as a list row and the diff table behind it.
 
     A rename is titled as one file with only the moved part written twice
     (``boto3-{1.34.0 → 1.35.20}.dist-info/METADATA``), rather than as two
@@ -423,22 +693,12 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
     if change.size_delta:
         stat += f"<span>{signed(change.size_delta)} B</span>"
     if note := change.line_count_note:
-        # The block is collapsed until someone opens it, so a summary row with
-        # no ``+`` and no ``−`` is all most readers ever see of this file. The
-        # note is the difference between "measured differently" and "unchanged".
+        # The diff is behind a click, so a row with no ``+`` and no ``−`` is all
+        # most readers ever see of this file. The note is the difference between
+        # "measured differently" and "unchanged".
         stat += f'<span class="skipped">{_esc(note)}</span>'
 
-    parts = [
-        f'<details class="file" data-path="{_esc(change.path)} {_esc(change.old_path or "")}" '
-        f'data-vendor="{1 if change.is_vendor else 0}">',
-        "<summary>",
-        f'<span class="chip {_esc(change.kind)}">{_esc(change.kind)}</span>',
-        f'<span class="path">{icons.file_icon(change.path, lang)}'
-        f'<span class="p">{title}</span></span>',
-        f'<span class="stat-line">{stat}</span>',
-        "</summary>",
-    ]
-
+    parts: list[str] = []
     if change.diff_lines:
         old = _paint(a_root, change.old_path or change.path, lang) if change.old else None
         new = _paint(b_root, change.path, lang) if change.new else None
@@ -450,7 +710,7 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
                 parts.append(f'<tr class="hunk"><td colspan="4">{_esc(row.text)}</td></tr>')
                 continue
             css = f' class="{row.css}"' if row.css in ("add", "del") else ""
-            mark = {"add": "+", "del": "\u2212"}.get(row.css, "")
+            mark = {"add": "+", "del": "−"}.get(row.css, "")
             code = intraline.mark(_row_code(row, lang, old, new), marks.get(index, []))
             parts.append(
                 f"<tr{css}>"
@@ -490,8 +750,16 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
                      'is on disk.')
         parts.append(f'<div class="note">{note}</div>')
 
-    parts.append("</details>")
-    return "\n".join(parts)
+    return _file_block(
+        path_key=f'{change.path} {change.old_path or ""}',
+        chip_class=change.kind,
+        chip_text=change.kind,
+        icon=icons.file_icon(change.path, lang),
+        title=title,
+        stat=stat,
+        body="\n".join(parts),
+        is_vendor=change.is_vendor,
+    )
 
 
 def _render_word_edits(change: FileChange) -> str:
@@ -541,15 +809,14 @@ def _render_move(group: MoveGroup) -> str:
     files, so nothing is hidden that expanding will not show. The alternative
     is twenty blocks whose titles differ only in the filename at the end.
 
-    Kept searchable and filterable like any file block: ``data-path`` holds
-    every member path so the filter box still finds one by name, and
-    ``data-vendor`` is set only when the whole move is vendored, which is the
-    dependency-bump case (``boto3-1.{34.0 → 35.20}.dist-info/``).
+    Kept searchable and filterable like any file block: the filter box matches
+    on every member path, and the block counts as vendored only when the whole
+    move is, which is the dependency-bump case
+    (``boto3-1.{34.0 → 35.20}.dist-info/``).
 
-    ``data-files`` is how many files this block is the *only* entry for, so the
-    "N of M files shown" counter stays a count of files. The edited members are
-    left out of it because they follow as blocks of their own and would
-    otherwise be counted twice.
+    The file count it reports to :func:`_file_block` leaves out the edited
+    members, so the "N of M files shown" counter stays a count of files: those
+    members follow as blocks of their own and would otherwise be counted twice.
     """
     head, was, now, tail = rename_label(*group.display_dirs)
     title = (
@@ -579,18 +846,16 @@ def _render_move(group: MoveGroup) -> str:
         + "</li>"
         for c in group.members
     )
-    return (
-        f'<details class="file" data-path="{_esc(searchable)}" '
-        f'data-vendor="{1 if group.is_vendor else 0}" '
-        f'data-files="{group.moved - group.edited}">'
-        "<summary>"
-        '<span class="chip renamed">moved</span>'
-        f'<span class="path">{icons.file_icon(group.new_dir + "/", "text")}'
-        f'<span class="p">{title}</span></span>'
-        f'<span class="stat-line">{stat}</span>'
-        "</summary>"
-        f'<ul class="moved-list">{rows}</ul>'
-        "</details>"
+    return _file_block(
+        path_key=searchable,
+        chip_class="renamed",
+        chip_text="moved",
+        icon=icons.file_icon(group.new_dir + "/", "text"),
+        title=title,
+        stat=stat,
+        body=f'<ul class="moved-list">{rows}</ul>',
+        is_vendor=group.is_vendor,
+        files=group.moved - group.edited,
     )
 
 
@@ -773,8 +1038,68 @@ def _findings_section(diff: VersionDiff) -> str:
     return f"<h2>New findings</h2>{table}{resolved}"
 
 
+#: Without the script the sheet can never open, so the diffs sit under their own
+#: rows instead and the controls that would do nothing are taken off the page.
+NOSCRIPT = """
+.toolbar, .sheet, .scrim { display: none; }
+.row { cursor: default; }
+.row::after { display: none; }
+.file .body[hidden] { display: block; }
+"""
+
+
+def _nav_button(ident: str, label: str, glyph: str, extra: str = "") -> str:
+    """One of the sheet's three controls: a 16×16 stroked glyph with a spoken name.
+
+    ``label`` names the keystroke as well as the action (``Next file (j)``),
+    because a shortcut on a page with no menu has nowhere else to be found.
+    """
+    return (
+        f'<button type="button" class="iconbtn{extra}" id="{ident}" '
+        f'title="{_esc(label)}" aria-label="{_esc(label)}">'
+        f'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="{glyph}"/></svg></button>'
+    )
+
+
+def _sheet(diff: VersionDiff) -> str:
+    """The panel a file's diff opens into, and the scrim behind it on a narrow window.
+
+    One frame per page rather than one per file: the script moves the clicked
+    file's diff into it, so what is written here is everything around that diff
+    — the path, its counts, which two versions are being compared, and the
+    controls that walk the list without going back to it.
+
+    The heading is left empty because it is filled from the row that was
+    clicked; see the ``show`` function in :data:`JS`.
+    """
+    return (
+        '<div class="scrim" id="scrim"></div>'
+        '<aside class="sheet" id="sheet" role="dialog" aria-labelledby="sheet-title">'
+        '<div class="grip" id="sheet-grip" title="Drag to resize"></div>'
+        '<header class="sheet-head"><div class="sheet-bar">'
+        '<div class="sheet-title" id="sheet-title"></div>'
+        '<div class="sheet-nav">'
+        + _nav_button("sheet-prev", "Previous file (k)", "m4.5 9.75 3.5-3.5 3.5 3.5")
+        + '<span class="pos" id="sheet-pos"></span>'
+        + _nav_button("sheet-next", "Next file (j)", "m4.5 6.25 3.5 3.5 3.5-3.5")
+        + _nav_button("sheet-close", "Close (Esc)", "m4.5 4.5 7 7m0-7-7 7", " close")
+        + "</div></div>"
+        '<div class="sheet-sub"><span id="sheet-stat"></span>'
+        f'<span class="ver">v{diff.a_seq:04d} → v{diff.b_seq:04d}</span>'
+        "</div></header>"
+        '<div class="sheet-body" id="sheet-body" tabindex="-1"></div>'
+        "</aside>"
+    )
+
+
 def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
-    """Render the full report as a single HTML document."""
+    """Render the full report as a single HTML document.
+
+    What the reader gets is a summary they can take in without scrolling, then
+    a list of every changed file. Clicking one opens its diff in the sheet
+    beside the list rather than underneath it — see :func:`_sheet` — so the
+    list keeps its place and the code gets the width it wants.
+    """
     title = f"{diff.function_name} · v{diff.a_seq:04d} → v{diff.b_seq:04d}"
     a_when = format_ts(diff.a_meta.get("ingested_at"))
     b_when = format_ts(diff.b_meta.get("ingested_at"))
@@ -790,15 +1115,24 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
         blocks.extend(
             _render_file(c, diff.a_root, diff.b_root) for c in row.edited_members
         )
-    file_blocks = "\n".join(blocks)
-    if not diff.files:
-        file_blocks = '<div class="empty">No file-level changes between these versions.</div>'
-
     vendor_toggle = (
         '<label><input type="checkbox" id="vendor" checked> show vendored files</label>'
         if any(c.is_vendor for c in diff.files)
         else ""
     )
+    # Two versions with the same tree have nothing to filter and nothing to
+    # open, so that page is one sentence: a search box above it would only
+    # offer to narrow an empty list.
+    toolbar = listing = ""
+    if diff.files:
+        toolbar = (
+            '<div class="toolbar">'
+            '<input type="search" id="filter" placeholder="Filter by path…" autocomplete="off">'
+            f'{vendor_toggle}<span class="sub" id="shown-count"></span></div>'
+        )
+        listing = '<div class="files">{}</div>'.format("\n".join(blocks))
+    else:
+        listing = '<div class="empty">No file-level changes between these versions.</div>'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -807,6 +1141,7 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(title)}</title>
 <style>{CSS}{ICON_CSS}</style>
+<noscript><style>{NOSCRIPT}</style></noscript>
 </head>
 <body>
 {icons.sprite()}
@@ -826,20 +1161,15 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
   {_findings_section(diff)}
 
   <h2>File changes</h2>
-  <div class="toolbar">
-    <input type="search" id="filter" placeholder="Filter by path…" autocomplete="off">
-    {vendor_toggle}
-    <button type="button" id="expand-all">Expand all</button>
-    <button type="button" id="collapse-all">Collapse all</button>
-    <span class="sub" id="shown-count"></span>
-  </div>
-  {file_blocks}
+  {toolbar}
+  {listing}
 
   <footer>
     Generated by {_esc(generated_by)} on {_esc(datetime.now().strftime('%Y-%m-%d %H:%M'))}.
     Content hashes ignore zip timestamps, so re-downloading unchanged code does not create a new version.
   </footer>
 </div>
+{_sheet(diff)}
 <script>{JS}</script>
 </body>
 </html>

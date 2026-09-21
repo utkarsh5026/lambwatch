@@ -526,8 +526,8 @@ def test_the_html_report_folds_the_move_but_keeps_the_edits(cfg, db, ingestor: I
     ingestor.ingest(make_zip("fn.zip", after))
 
     html = render_html(_diff(cfg, db, ingestor))
-    assert html.count('details class="file"') == 3      # the move, plus the two edits
-    assert html.count('<li class="mono">') == 20        # nothing hidden that expanding won't show
+    assert html.count('<article class="file"') == 3     # the move, plus the two edits
+    assert html.count('<li class="mono">') == 20        # nothing hidden that opening it won't show
     assert html.count('<div class="diff">') == 2        # both edits keep their patch
     # The counter stays a count of files, not of blocks.
     assert 'data-files="18"' in html

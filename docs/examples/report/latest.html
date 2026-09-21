@@ -108,44 +108,52 @@ table.grid td.label { width: 210px; color: var(--muted); }
 .tok.removed { background: var(--del-bg); border-color: var(--del-gutter); color: var(--del-fg); }
 
 /* ---- toolbar --------------------------------------------------------- */
-.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;
-  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 5;
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
+  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 6;
   box-shadow: 0 1px 0 var(--border); }
 .toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; color: var(--faint); }
-.toolbar input[type=search] { flex: 1 1 220px; min-width: 140px; padding: 6px 10px; border-radius: 6px;
+.toolbar input[type=search] { flex: 1 1 240px; min-width: 150px; padding: 7px 11px; border-radius: 7px;
   border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px; }
-.toolbar input[type=search]:focus { outline: none; border-color: var(--accent); }
+.toolbar input[type=search]:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash); }
 .toolbar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px;
   align-items: center; cursor: pointer; user-select: none; }
-.toolbar button { padding: 6px 11px; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--muted); font-size: 13px; cursor: pointer; }
-.toolbar button:hover { border-color: var(--faint); color: var(--text); }
 
-/* ---- one file -------------------------------------------------------- */
-details.file { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+/* ---- the file list --------------------------------------------------- */
+/* One panel of rows rather than a stack of cards, because the list is an index
+   now: the diff it points at opens beside it instead of pushing the rest of
+   the list down the page. A row is a button, since that is what it does. */
+.files { border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
   background: var(--panel); }
-details.file[open] { background: var(--bg); }
-details.file > summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 10px;
-  align-items: center; list-style: none; font-size: 13px; border-radius: 7px; }
-details.file > summary::-webkit-details-marker { display: none; }
-details.file > summary:hover { background: var(--panel); }
-/* The header stays put while a long file scrolls past, so the path is still
-   readable eighty lines into its own diff. */
-details.file[open] > summary { position: sticky; top: var(--toolbar-h, 54px); z-index: 3;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border); border-radius: 7px 7px 0 0; }
-summary .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-summary .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.file { border-top: 1px solid var(--rule); }
+/* Transparent rather than absent so every row is the same height, whichever
+   one the filter left at the top. */
+.file:first-child, .file.first-shown { border-top-color: transparent; }
+.row { display: flex; gap: 10px; align-items: center; width: 100%; padding: 9px 14px;
+  font: inherit; color: var(--text); text-align: left; background: none; border: 0;
+  cursor: pointer; }
+.row:hover { background: var(--sunken); }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* The chevron points where the diff will appear: to the side, not downwards.
+   Drawn in CSS because a vendored diff runs to thousands of rows, and each one
+   would otherwise carry its own copy of the glyph. */
+.row::after { content: ""; flex: 0 0 auto; width: 6px; height: 6px; margin-left: 2px;
+  border: 1.6px solid var(--faint); border-left: 0; border-bottom: 0;
+  transform: rotate(45deg); transition: transform .15s ease, border-color .15s ease; }
+.row:hover::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
+.file.active .row { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
+.file.active .row::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
+.row .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.row .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 /* The tint hugs the changed part exactly — padding here would open a gap in
    the middle of a path and read as though the name contained a space. */
-summary .path .ren { background: var(--sunken); border-radius: 3px; }
-summary .path .was { color: var(--faint); }
-summary .stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
+.path .ren { background: var(--sunken); border-radius: 3px; }
+.path .was { color: var(--faint); }
+.stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
   display: flex; gap: 8px; align-items: baseline; color: var(--faint); }
 
 /* ---- the diff itself ------------------------------------------------- */
 .diff { overflow-x: auto; border-top: 1px solid var(--border); }
-details.file[open] > .diff { border-top: none; }
 .diff table { border-collapse: collapse; width: 100%; font-family: var(--mono);
   font-size: 12.5px; line-height: 1.5; }
 .diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
@@ -172,6 +180,20 @@ details.file[open] > .diff { border-top: none; }
 .wd { border-radius: 3px; }
 tr.add .wd { background: var(--add-word); }
 tr.del .wd { background: var(--del-word); }
+/* A file with no usable lines: one row per changed run, the unchanged text
+   either side dimmed so the eye lands on the part that moved. Shares the add
+   and delete colours with the table above so the two read as one legend. */
+.stat-line .skipped { color: var(--faint); font-style: italic; }
+.wordedit { overflow-x: auto; border-top: 1px solid var(--border); }
+.wordedit table { border-collapse: collapse; width: 100%; font-family: var(--mono);
+  font-size: 12px; line-height: 1.7; }
+.wordedit td { padding: 1px 8px; white-space: pre; vertical-align: top; }
+.wordedit td.at { width: 1%; text-align: right; color: var(--faint);
+  background: var(--sunken); border-right: 1px solid var(--border); }
+.wordedit td.run { width: 100%; color: var(--faint); }
+.wordedit .was { background: var(--del-word); color: var(--del-fg); border-radius: 3px; }
+.wordedit .was.gone { text-decoration: line-through; }
+.wordedit .now { background: var(--add-word); color: var(--add-fg); border-radius: 3px; }
 .tk-c { color: var(--tk-c); font-style: italic; }
 .tk-k { color: var(--tk-k); }
 .tk-s { color: var(--tk-s); }
@@ -188,6 +210,96 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
 .moved-list { margin: 0; padding: 10px 16px 12px 34px; list-style: disc;
   color: var(--muted); font-size: 12px; line-height: 1.9; }
 .moved-list .hint { color: var(--faint); }
+/* ---- the sheet ------------------------------------------------------- */
+/* Where the diff lands when a row is clicked. Code wants width, and a block
+   that opened downwards spent the page's widest dimension on the file list it
+   had just pushed out of view; this keeps the list where it was, so the next
+   file is one click away rather than one scroll back.
+
+   A wide window docks the sheet and the page makes room beside it. A narrow
+   one slides it over the page with a scrim, because a laptop in portrait has
+   no room to dock and half a diff is worse than a covered list. */
+:root { --sheet-w: 760px; }
+.scrim { position: fixed; inset: 0; z-index: 30; background: rgba(8, 13, 20, .44);
+  opacity: 0; visibility: hidden; transition: opacity .26s ease, visibility 0s linear .26s; }
+body.sheet-open .scrim { opacity: 1; visibility: visible; transition: opacity .26s ease; }
+.sheet { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+  width: min(100%, var(--sheet-w)); display: flex; flex-direction: column;
+  background: var(--bg); border-left: 1px solid var(--border);
+  box-shadow: -24px 0 60px -30px rgba(6, 11, 18, .5);
+  /* `visibility` rather than `display`, so the sheet can animate out and still
+     leave nothing behind for the keyboard to land on while it is shut. It turns
+     visible on the same frame it is asked to — a transition would leave it
+     unfocusable for the length of the slide, which is exactly when the script
+     is moving focus into it — and back to hidden only once the slide is over. */
+  transform: translateX(100%); visibility: hidden;
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1), visibility 0s linear .26s; }
+body.sheet-open .sheet { transform: none; visibility: visible;
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1); }
+.sheet-head { padding: 12px 14px 11px; border-bottom: 1px solid var(--border);
+  background: var(--panel); display: flex; flex-direction: column; gap: 7px; }
+.sheet-bar { display: flex; align-items: center; gap: 10px; }
+.sheet-title { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.sheet-title .path { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sheet-title .p { font-family: var(--mono); font-size: 13px; font-weight: 600;
+  overflow-wrap: anywhere; }
+/* Wrapping rather than clipping: a file whose counts are a sentence — "missing
+   from the archive" — is exactly the one whose reader needs to read them. */
+.sheet-sub { display: flex; align-items: baseline; gap: 12px; min-height: 18px;
+  flex-wrap: wrap; color: var(--faint); font-size: 12px; }
+.sheet-sub .ver { margin-left: auto; font-family: var(--mono); white-space: nowrap; }
+.sheet-nav { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.sheet-nav .pos { color: var(--faint); font-size: 12px; padding: 0 3px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.iconbtn { display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid transparent;
+  background: none; color: var(--muted); cursor: pointer; }
+.iconbtn:hover:not(:disabled) { background: var(--sunken); border-color: var(--border);
+  color: var(--text); }
+.iconbtn:disabled { opacity: .3; cursor: default; }
+.iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.iconbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.iconbtn.close { margin-left: 5px; }
+.sheet-body { flex: 1; overflow: auto; overscroll-behavior: contain; }
+.sheet-body:focus { outline: none; }
+/* The panel's own top rule would double the header's. */
+.sheet-body > .body > :first-child { border-top: none; }
+/* One file wants sixty columns and the next wants two hundred, and which one
+   is on screen is not something the page can know — so the edge is draggable
+   wherever there is a pointer and room to dock. */
+.grip { position: absolute; left: 0; top: 0; bottom: 0; width: 11px; display: none;
+  cursor: col-resize; }
+.grip::before { content: ""; position: absolute; left: 4px; top: 50%; width: 3px; height: 44px;
+  margin-top: -22px; border-radius: 3px; background: var(--border); transition: background .15s; }
+.grip:hover::before, body.dragging .grip::before { background: var(--accent); }
+body.dragging { user-select: none; cursor: col-resize; }
+body.dragging, body.dragging .sheet { transition: none; }
+
+@media (min-width: 1280px) {
+  :root { --sheet-w: min(50vw, 960px); }
+  .scrim { display: none; }
+  .grip { display: block; }
+  body { transition: padding-right .26s cubic-bezier(.22, .61, .36, 1); }
+  body.sheet-open { padding-right: min(var(--sheet-w), 76vw); }
+}
+/* Nothing to dock into: the sheet is over the page, so the page stops scrolling
+   underneath it. */
+@media (max-width: 1279.98px) {
+  body.sheet-open { overflow: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body, .sheet, .scrim, .row::after { transition: none; }
+}
+/* On paper there is no clicking, so every diff is printed under its own row and
+   the chrome that only answers a pointer is left out. */
+@media print {
+  .toolbar, .scrim, .sheet-nav, .grip { display: none !important; }
+  .sheet { position: static; transform: none; visibility: visible; width: auto;
+    border-left: 0; box-shadow: none; }
+  body.sheet-open { padding-right: 0; overflow: visible; }
+  .file .body[hidden] { display: block; }
+}
 .hidden { display: none !important; }
 svg.sprite { display: none; }
 .fic { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor;
@@ -226,6 +338,12 @@ svg.sprite { display: none; }
 .fic-image { color: #a06fc0; }
 .fic-_other { color: #8b8f97; }
 </style>
+<noscript><style>
+.toolbar, .sheet, .scrim { display: none; }
+.row { cursor: default; }
+.row::after { display: none; }
+.file .body[hidden] { display: block; }
+</style></noscript>
 </head>
 <body>
 <svg class="sprite" aria-hidden="true"><symbol id="g-code" viewBox="0 0 16 16"><path d="M6.2 4.4 2.6 8l3.6 3.6"/><path d="M9.8 4.4 13.4 8l-3.6 3.6"/></symbol><symbol id="g-markup" viewBox="0 0 16 16"><path d="M5.4 3.6 2 8l3.4 4.4"/><path d="M10.6 3.6 14 8l-3.4 4.4"/><path d="M9.4 2.6 6.6 13.4"/></symbol><symbol id="g-data" viewBox="0 0 16 16"><path d="M6.6 2.8c-1.4 0-2 .7-2 1.9v1.4c0 1-.6 1.6-1.6 1.9 1 .3 1.6.9 1.6 1.9v1.4c0 1.2.6 1.9 2 1.9"/><path d="M9.4 2.8c1.4 0 2 .7 2 1.9v1.4c0 1 .6 1.6 1.6 1.9-1 .3-1.6.9-1.6 1.9v1.4c0 1.2-.6 1.9-2 1.9"/></symbol><symbol id="g-doc" viewBox="0 0 16 16"><path d="M3.2 4.2h9.6"/><path d="M3.2 8h9.6"/><path d="M3.2 11.8h5.8"/></symbol><symbol id="g-terminal" viewBox="0 0 16 16"><rect x="2.2" y="3.2" width="11.6" height="9.6" rx="2"/><path d="M4.9 6.9 7 9l-2.1 2.1"/><path d="M8.7 11.1h2.8"/></symbol><symbol id="g-style" viewBox="0 0 16 16"><path d="M8 2.4c2.6 2.7 4 4.7 4 6.3a4 4 0 0 1-8 0c0-1.6 1.4-3.6 4-6.3z"/></symbol><symbol id="g-lock" viewBox="0 0 16 16"><rect x="3.2" y="7" width="9.6" height="6.2" rx="1.6"/><path d="M5.6 7V5.4a2.4 2.4 0 0 1 4.8 0V7"/></symbol><symbol id="g-image" viewBox="0 0 16 16"><rect x="2.4" y="3.4" width="11.2" height="9.2" rx="1.8"/><circle cx="6" cy="6.9" r="1.1"/><path d="m3 11.8 3.2-3 2.4 2.3 2.2-1.8 2.8 2.5"/></symbol><symbol id="g-binary" viewBox="0 0 16 16"><path d="M8 2.4 13.6 5.4v5.2L8 13.6 2.4 10.6V5.4z"/><path d="M2.4 5.4 8 8.4l5.6-3"/><path d="M8 8.4v5.2"/></symbol></svg>
@@ -234,8 +352,8 @@ svg.sprite { display: none; }
     <h1>order-processor
       <span class="ver">v0001<span class="arrow">→</span>v0002</span></h1>
     <div class="sub">
-      2 added, 2 modified, 9 renamed, 55 vendored · v0001 archived 2026-09-06 19:55,
-      v0002 archived 2026-09-06 19:55
+      2 added, 2 modified, 9 renamed, 55 vendored · v0001 archived 2026-09-21 10:45,
+      v0002 archived 2026-09-21 10:45
     </div>
   </header>
 
@@ -245,20 +363,8 @@ svg.sprite { display: none; }
   <h2>New findings</h2><div class='scroll'><table class='grid'><thead><tr><th>severity</th><th>kind</th><th>where</th><th>detail</th></tr></thead><tbody><tr><td><span class="chip high">high</span></td><td>aws-access-key-id</td><td class="mono">config.py:6</td><td class="mono">AKIA…LE (20 chars)</td></tr><tr><td><span class="chip high">high</span></td><td>stripe-key</td><td class="mono">config.py:7</td><td class="mono">sk_l…dc (32 chars)</td></tr><tr><td><span class="chip low">low</span></td><td>debug-flag</td><td class="mono">config.py:8</td><td class="mono">DEBUG = True</td></tr></tbody></table></div>
 
   <h2>File changes</h2>
-  <div class="toolbar">
-    <input type="search" id="filter" placeholder="Filter by path…" autocomplete="off">
-    <label><input type="checkbox" id="vendor" checked> show vendored files</label>
-    <button type="button" id="expand-all">Expand all</button>
-    <button type="button" id="collapse-all">Collapse all</button>
-    <span class="sub" id="shown-count"></span>
-  </div>
-  <details class="file" data-path="lambda_function.py " data-vendor="0">
-<summary>
-<span class="chip modified">modified</span>
-<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">lambda_function.py</span></span>
-<span class="stat-line"><span class="add">+9</span><span class="del">−2</span><span>+322 B</span></span>
-</summary>
-<div class="diff"><table>
+  <div class="toolbar"><input type="search" id="filter" placeholder="Filter by path…" autocomplete="off"><label><input type="checkbox" id="vendor" checked> show vendored files</label><span class="sub" id="shown-count"></span></div>
+  <div class="files"><article class="file" data-path="lambda_function.py " data-vendor="0"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip modified">modified</span><span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">lambda_function.py</span></span><span class="stat-line"><span class="add">+9</span><span class="del">−2</span><span>+322 B</span></span></button><div class="body" hidden><div class="diff"><table>
 <tr class="hunk"><td colspan="4">@@ -1,16 +1,19 @@</td></tr>
 <tr class="del"><td class="ln">1</td><td class="ln"></td><td class="mark">−</td><td class="code"><span class="tk-s">&quot;&quot;&quot;Validate an incoming order<span class="wd"> and</span> record it.&quot;&quot;&quot;</span></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">1</td><td class="mark">+</td><td class="code"><span class="tk-s">&quot;&quot;&quot;Validate an incoming order<span class="wd">,</span> record it<span class="wd">, and queue it for fulfilment</span>.&quot;&quot;&quot;</span></td></tr>
@@ -292,28 +398,14 @@ svg.sprite { display: none; }
 <tr class="add"><td class="ln"></td><td class="ln">29</td><td class="mark">+</td><td class="code">    sqs.<span class="tk-f">send_message</span>(QueueUrl=QUEUE_URL, MessageBody=json.<span class="tk-f">dumps</span>(order))</td></tr>
 <tr><td class="ln">23</td><td class="ln">30</td><td class="mark"></td><td class="code"></td></tr>
 <tr><td class="ln">24</td><td class="ln">31</td><td class="mark"></td><td class="code">    <span class="tk-k">return</span> {<span class="tk-s">&quot;statusCode&quot;</span>: <span class="tk-n">201</span>, <span class="tk-s">&quot;body&quot;</span>: json.<span class="tk-f">dumps</span>({<span class="tk-s">&quot;id&quot;</span>: order[<span class="tk-s">&quot;id&quot;</span>]})}</td></tr>
-</table></div>
-</details>
-<details class="file" data-path="requirements.txt " data-vendor="0">
-<summary>
-<span class="chip modified">modified</span>
-<span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">requirements.txt</span></span>
-<span class="stat-line"><span class="add">+2</span><span class="del">−1</span><span>+17 B</span></span>
-</summary>
-<div class="diff"><table>
+</table></div></div></article>
+<article class="file" data-path="requirements.txt " data-vendor="0"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip modified">modified</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">requirements.txt</span></span><span class="stat-line"><span class="add">+2</span><span class="del">−1</span><span>+17 B</span></span></button><div class="body" hidden><div class="diff"><table>
 <tr class="hunk"><td colspan="4">@@ -1 +1,2 @@</td></tr>
 <tr class="del"><td class="ln">1</td><td class="ln"></td><td class="mark">−</td><td class="code">boto3==1.<span class="wd">34</span>.<span class="wd">0</span></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">1</td><td class="mark">+</td><td class="code">boto3==1.<span class="wd">35</span>.<span class="wd">20</span></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">2</td><td class="mark">+</td><td class="code">pydantic==2.9.0</td></tr>
-</table></div>
-</details>
-<details class="file" data-path="config.py " data-vendor="0">
-<summary>
-<span class="chip added">added</span>
-<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">config.py</span></span>
-<span class="stat-line"><span class="add">+10</span><span>+235 B</span></span>
-</summary>
-<div class="diff"><table>
+</table></div></div></article>
+<article class="file" data-path="config.py " data-vendor="0"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip added">added</span><span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">config.py</span></span><span class="stat-line"><span class="add">+10</span><span>+235 B</span></span></button><div class="body" hidden><div class="diff"><table>
 <tr class="hunk"><td colspan="4">@@ -0,0 +1,10 @@</td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">1</td><td class="mark">+</td><td class="code"><span class="tk-s">&quot;&quot;&quot;Runtime configuration.</span></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">2</td><td class="mark">+</td><td class="code"></td></tr>
@@ -325,23 +417,9 @@ svg.sprite { display: none; }
 <tr class="add"><td class="ln"></td><td class="ln">8</td><td class="mark">+</td><td class="code">DEBUG = <span class="tk-t">True</span></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">9</td><td class="mark">+</td><td class="code"></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">10</td><td class="mark">+</td><td class="code">MAX_ITEMS = <span class="tk-n">50</span></td></tr>
-</table></div>
-</details>
-<details class="file" data-path="helpers/__init__.py " data-vendor="0">
-<summary>
-<span class="chip added">added</span>
-<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">helpers/__init__.py</span></span>
-<span class="stat-line"></span>
-</summary>
-<div class="note">No line diff shown (file is empty). 0 B → 0 B.</div>
-</details>
-<details class="file" data-path="helpers/db.py db.py" data-vendor="0">
-<summary>
-<span class="chip renamed">renamed</span>
-<span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p"><span class="ren"><span class="was">db</span> → helpers/db</span>.py</span></span>
-<span class="stat-line"><span class="add">+1</span><span>+33 B</span></span>
-</summary>
-<div class="diff"><table>
+</table></div></div></article>
+<article class="file" data-path="helpers/__init__.py " data-vendor="0"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip added">added</span><span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p">helpers/__init__.py</span></span><span class="stat-line"></span></button><div class="body" hidden><div class="note">No line diff shown (file is empty). 0 B → 0 B.</div></div></article>
+<article class="file" data-path="helpers/db.py db.py" data-vendor="0"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip renamed">renamed</span><span class="path"><svg class="fic fic-python" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-code"/></svg><span class="p"><span class="ren"><span class="was">db</span> → helpers/db</span>.py</span></span><span class="stat-line"><span class="add">+1</span><span>+33 B</span></span></button><div class="body" hidden><div class="diff"><table>
 <tr class="hunk"><td colspan="4">@@ -9,5 +9,6 @@</td></tr>
 <tr><td class="ln">9</td><td class="ln">9</td><td class="mark"></td><td class="code">            <span class="tk-s">&quot;id&quot;</span>: order[<span class="tk-s">&quot;id&quot;</span>],</td></tr>
 <tr><td class="ln">10</td><td class="ln">10</td><td class="mark"></td><td class="code">            <span class="tk-s">&quot;items&quot;</span>: order[<span class="tk-s">&quot;items&quot;</span>],</td></tr>
@@ -349,86 +427,201 @@ svg.sprite { display: none; }
 <tr class="add"><td class="ln"></td><td class="ln">12</td><td class="mark">+</td><td class="code">            <span class="tk-s">&quot;status&quot;</span>: <span class="tk-s">&quot;PENDING&quot;</span>,</td></tr>
 <tr><td class="ln">12</td><td class="ln">13</td><td class="mark"></td><td class="code">        }</td></tr>
 <tr><td class="ln">13</td><td class="ln">14</td><td class="mark"></td><td class="code">    )</td></tr>
-</table></div>
-</details>
-<details class="file" data-path="site-packages/boto3-1.35.20.dist-info/INSTALLER site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.35.20.dist-info/WHEEL site-packages/boto3-1.35.20.dist-info/top_level.txt site-packages/boto3-1.34.0.dist-info/INSTALLER site-packages/boto3-1.34.0.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/WHEEL site-packages/boto3-1.34.0.dist-info/top_level.txt" data-vendor="1" data-files="3"><summary><span class="chip renamed">moved</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/boto3-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/</span></span><span class="stat-line"><span>4 files moved</span><span class="del">1 edited</span><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></summary><ul class="moved-list"><li class="mono">INSTALLER</li><li class="mono">METADATA <span class="hint">edited</span></li><li class="mono">WHEEL</li><li class="mono">top_level.txt</li></ul></details>
-<details class="file" data-path="site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/METADATA" data-vendor="1">
-<summary>
-<span class="chip renamed">renamed</span>
-<span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/boto3-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/METADATA</span></span>
-<span class="stat-line"><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span>
-</summary>
-<div class="diff"><table>
+</table></div></div></article>
+<article class="file" data-path="site-packages/boto3-1.35.20.dist-info/INSTALLER site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.35.20.dist-info/WHEEL site-packages/boto3-1.35.20.dist-info/top_level.txt site-packages/boto3-1.34.0.dist-info/INSTALLER site-packages/boto3-1.34.0.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/WHEEL site-packages/boto3-1.34.0.dist-info/top_level.txt" data-vendor="1" data-files="3"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip renamed">moved</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/boto3-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/</span></span><span class="stat-line"><span>4 files moved</span><span class="del">1 edited</span><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></button><div class="body" hidden><ul class="moved-list"><li class="mono">INSTALLER</li><li class="mono">METADATA <span class="hint">edited</span></li><li class="mono">WHEEL</li><li class="mono">top_level.txt</li></ul></div></article>
+<article class="file" data-path="site-packages/boto3-1.35.20.dist-info/METADATA site-packages/boto3-1.34.0.dist-info/METADATA" data-vendor="1"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip renamed">renamed</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/boto3-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/METADATA</span></span><span class="stat-line"><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></button><div class="body" hidden><div class="diff"><table>
 <tr class="hunk"><td colspan="4">@@ -1,4 +1,4 @@</td></tr>
 <tr><td class="ln">1</td><td class="ln">1</td><td class="mark"></td><td class="code">Metadata-Version: 2.1</td></tr>
 <tr><td class="ln">2</td><td class="ln">2</td><td class="mark"></td><td class="code">Name: boto3</td></tr>
 <tr class="del"><td class="ln">3</td><td class="ln"></td><td class="mark">−</td><td class="code">Version: 1.<span class="wd">34</span>.<span class="wd">0</span></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">3</td><td class="mark">+</td><td class="code">Version: 1.<span class="wd">35</span>.<span class="wd">20</span></td></tr>
 <tr><td class="ln">4</td><td class="ln">4</td><td class="mark"></td><td class="code">Summary: The AWS SDK for Python</td></tr>
-</table></div>
-</details>
-<details class="file" data-path="site-packages/botocore-1.35.20.dist-info/INSTALLER site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.35.20.dist-info/WHEEL site-packages/botocore-1.35.20.dist-info/top_level.txt site-packages/botocore-1.34.0.dist-info/INSTALLER site-packages/botocore-1.34.0.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/WHEEL site-packages/botocore-1.34.0.dist-info/top_level.txt" data-vendor="1" data-files="3"><summary><span class="chip renamed">moved</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/botocore-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/</span></span><span class="stat-line"><span>4 files moved</span><span class="del">1 edited</span><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></summary><ul class="moved-list"><li class="mono">INSTALLER</li><li class="mono">METADATA <span class="hint">edited</span></li><li class="mono">WHEEL</li><li class="mono">top_level.txt</li></ul></details>
-<details class="file" data-path="site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/METADATA" data-vendor="1">
-<summary>
-<span class="chip renamed">renamed</span>
-<span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/botocore-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/METADATA</span></span>
-<span class="stat-line"><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span>
-</summary>
-<div class="diff"><table>
+</table></div></div></article>
+<article class="file" data-path="site-packages/botocore-1.35.20.dist-info/INSTALLER site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.35.20.dist-info/WHEEL site-packages/botocore-1.35.20.dist-info/top_level.txt site-packages/botocore-1.34.0.dist-info/INSTALLER site-packages/botocore-1.34.0.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/WHEEL site-packages/botocore-1.34.0.dist-info/top_level.txt" data-vendor="1" data-files="3"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip renamed">moved</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/botocore-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/</span></span><span class="stat-line"><span>4 files moved</span><span class="del">1 edited</span><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></button><div class="body" hidden><ul class="moved-list"><li class="mono">INSTALLER</li><li class="mono">METADATA <span class="hint">edited</span></li><li class="mono">WHEEL</li><li class="mono">top_level.txt</li></ul></div></article>
+<article class="file" data-path="site-packages/botocore-1.35.20.dist-info/METADATA site-packages/botocore-1.34.0.dist-info/METADATA" data-vendor="1"><button class="row" type="button" aria-expanded="false" aria-controls="sheet"><span class="chip renamed">renamed</span><span class="path"><svg class="fic fic-text" viewBox="0 0 16 16" aria-hidden="true"><use href="#g-doc"/></svg><span class="p">site-packages/botocore-1.<span class="ren"><span class="was">34.0</span> → 35.20</span>.dist-info/METADATA</span></span><span class="stat-line"><span class="add">+1</span><span class="del">−1</span><span>+1 B</span></span></button><div class="body" hidden><div class="diff"><table>
 <tr class="hunk"><td colspan="4">@@ -1,4 +1,4 @@</td></tr>
 <tr><td class="ln">1</td><td class="ln">1</td><td class="mark"></td><td class="code">Metadata-Version: 2.1</td></tr>
 <tr><td class="ln">2</td><td class="ln">2</td><td class="mark"></td><td class="code">Name: botocore</td></tr>
 <tr class="del"><td class="ln">3</td><td class="ln"></td><td class="mark">−</td><td class="code">Version: 1.<span class="wd">34</span>.<span class="wd">0</span></td></tr>
 <tr class="add"><td class="ln"></td><td class="ln">3</td><td class="mark">+</td><td class="code">Version: 1.<span class="wd">35</span>.<span class="wd">20</span></td></tr>
 <tr><td class="ln">4</td><td class="ln">4</td><td class="mark"></td><td class="code">Summary: Low-level, data-driven core of boto 3</td></tr>
-</table></div>
-</details>
+</table></div></div></article></div>
 
   <footer>
-    Generated by lambda-watcher on 2026-09-06 19:55.
+    Generated by lambda-watcher on 2026-09-21 10:45.
     Content hashes ignore zip timestamps, so re-downloading unchanged code does not create a new version.
   </footer>
 </div>
+<div class="scrim" id="scrim"></div><aside class="sheet" id="sheet" role="dialog" aria-labelledby="sheet-title"><div class="grip" id="sheet-grip" title="Drag to resize"></div><header class="sheet-head"><div class="sheet-bar"><div class="sheet-title" id="sheet-title"></div><div class="sheet-nav"><button type="button" class="iconbtn" id="sheet-prev" title="Previous file (k)" aria-label="Previous file (k)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 9.75 3.5-3.5 3.5 3.5"/></svg></button><span class="pos" id="sheet-pos"></span><button type="button" class="iconbtn" id="sheet-next" title="Next file (j)" aria-label="Next file (j)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.25 3.5 3.5 3.5-3.5"/></svg></button><button type="button" class="iconbtn close" id="sheet-close" title="Close (Esc)" aria-label="Close (Esc)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button></div></div><div class="sheet-sub"><span id="sheet-stat"></span><span class="ver">v0001 → v0002</span></div></header><div class="sheet-body" id="sheet-body" tabindex="-1"></div></aside>
 <script>
 (function () {
   var search = document.getElementById('filter');
   var vendorToggle = document.getElementById('vendor');
-  var files = Array.prototype.slice.call(document.querySelectorAll('details.file'));
+  var counter = document.getElementById('shown-count');
+  var files = Array.prototype.slice.call(document.querySelectorAll('.files .file'));
+  var scrim = document.getElementById('scrim');
+  var host = document.getElementById('sheet-body');
+  var titleBox = document.getElementById('sheet-title');
+  var statBox = document.getElementById('sheet-stat');
+  var posBox = document.getElementById('sheet-pos');
+  var prevBtn = document.getElementById('sheet-prev');
+  var nextBtn = document.getElementById('sheet-next');
+  var closeBtn = document.getElementById('sheet-close');
+  var grip = document.getElementById('sheet-grip');
+  var openFile = null;   // whose diff is sitting in the sheet right now
+  var opener = null;     // the row that put it there, to hand focus back to
+
+  function listed() {
+    return files.filter(function (el) { return !el.classList.contains('hidden'); });
+  }
+
+  function empty(node) {
+    while (node && node.firstChild) { node.removeChild(node.firstChild); }
+  }
+
+  // The sheet header says the same things the row does, so it is built from a
+  // copy of the row rather than from a second set of markup on every file.
+  function copyInto(node, source) {
+    empty(node);
+    if (node && source) { node.appendChild(source.cloneNode(true)); }
+  }
+
+  function position() {
+    var rows = listed();
+    var at = openFile ? rows.indexOf(openFile) : -1;
+    if (posBox) { posBox.textContent = at < 0 ? '' : (at + 1) + ' / ' + rows.length; }
+    if (prevBtn) { prevBtn.disabled = at <= 0; }
+    if (nextBtn) { nextBtn.disabled = at < 0 || at >= rows.length - 1; }
+  }
+
+  // The diff is moved into the sheet rather than copied, so this puts it back
+  // where it came from. One diff exists at a time, wherever it is showing.
+  function park() {
+    if (!openFile) { return; }
+    var body = host.firstElementChild;
+    if (body) { body.hidden = true; openFile.appendChild(body); }
+    openFile.classList.remove('active');
+    var row = openFile.querySelector('.row');
+    if (row) { row.setAttribute('aria-expanded', 'false'); }
+    openFile = null;
+  }
+
+  function show(file, takeFocus) {
+    var row = file && file.querySelector('.row');
+    if (!row || !host) { return; }
+    park();
+    openFile = file;
+    file.classList.add('active');
+    row.setAttribute('aria-expanded', 'true');
+    var body = file.querySelector('.body');
+    if (body) { body.hidden = false; host.appendChild(body); }
+    host.scrollTop = 0;
+    empty(titleBox);
+    ['.chip', '.path'].forEach(function (part) {
+      var found = row.querySelector(part);
+      if (found && titleBox) { titleBox.appendChild(found.cloneNode(true)); }
+    });
+    copyInto(statBox, row.querySelector('.stat-line'));
+    document.body.classList.add('sheet-open');
+    position();
+    if (takeFocus) { host.focus(); }
+  }
+
+  function close() {
+    park();
+    document.body.classList.remove('sheet-open');
+    empty(titleBox);
+    empty(statBox);
+    position();
+    if (opener) { opener.focus(); opener = null; }
+  }
+
+  function step(delta) {
+    var rows = listed();
+    var at = openFile ? rows.indexOf(openFile) : -1;
+    var next = at < 0 ? null : rows[at + delta];
+    if (next) {
+      // Focus stays on the button that is walking the list, so the next press
+      // lands on it too.
+      show(next, false);
+      opener = next.querySelector('.row');
+    }
+  }
 
   function apply() {
-    var term = (search.value || '').toLowerCase();
+    var term = (search ? search.value : '').toLowerCase();
     var showVendor = vendorToggle ? vendorToggle.checked : true;
     var shown = 0;
+    var total = 0;
+    var first = true;
     files.forEach(function (el) {
       var path = (el.getAttribute('data-path') || '').toLowerCase();
       var isVendor = el.getAttribute('data-vendor') === '1';
       var ok = (!term || path.indexOf(term) !== -1) && (showVendor || !isVendor);
+      // A move block stands for every file it folded up, so both halves of the
+      // count are sums of `data-files` rather than counts of rows.
+      var covers = parseInt(el.getAttribute('data-files') || '1', 10);
       el.classList.toggle('hidden', !ok);
-      if (ok) shown += parseInt(el.getAttribute('data-files') || '1', 10);
+      el.classList.toggle('first-shown', ok && first);
+      total += covers;
+      if (ok) { shown += covers; first = false; }
     });
-    var counter = document.getElementById('shown-count');
-    if (counter) counter.textContent = shown + ' of ' + files.length + ' files shown';
+    if (counter) { counter.textContent = shown + ' of ' + total + ' files shown'; }
+    // Leaving the sheet open on a file the filter just took off the list would
+    // show a diff with no row to close it from.
+    if (openFile && openFile.classList.contains('hidden')) { close(); } else { position(); }
   }
 
-  if (search) search.addEventListener('input', apply);
-  if (vendorToggle) vendorToggle.addEventListener('change', apply);
+  files.forEach(function (file) {
+    var row = file.querySelector('.row');
+    if (!row) { return; }
+    row.addEventListener('click', function () {
+      if (file === openFile) { close(); return; }
+      opener = row;
+      show(file, true);
+    });
+  });
 
-  var toolbar = document.querySelector('.toolbar');
-  function measure() {
-    if (!toolbar) return;
-    document.documentElement.style.setProperty('--toolbar-h', toolbar.offsetHeight + 'px');
+  if (search) { search.addEventListener('input', apply); }
+  if (vendorToggle) { vendorToggle.addEventListener('change', apply); }
+  if (closeBtn) { closeBtn.addEventListener('click', close); }
+  if (scrim) { scrim.addEventListener('click', close); }
+  if (prevBtn) { prevBtn.addEventListener('click', function () { step(-1); }); }
+  if (nextBtn) { nextBtn.addEventListener('click', function () { step(1); }); }
+
+  document.addEventListener('keydown', function (ev) {
+    if (!openFile || ev.ctrlKey || ev.metaKey || ev.altKey) { return; }
+    if (ev.key === 'Escape') { close(); return; }
+    var tag = (ev.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') { return; }
+    if (ev.key === 'j') { step(1); ev.preventDefault(); }
+    if (ev.key === 'k') { step(-1); ev.preventDefault(); }
+  });
+
+  if (grip && window.PointerEvent) {
+    grip.addEventListener('pointerdown', function (down) {
+      down.preventDefault();
+      grip.setPointerCapture(down.pointerId);
+      document.body.classList.add('dragging');
+      function drag(move) {
+        // Clamped so a drag can neither shut the sheet nor bury the list
+        // behind it, whichever direction it is thrown in.
+        var width = Math.min(Math.max(window.innerWidth - move.clientX, 380),
+                             Math.max(window.innerWidth - 320, 380));
+        document.documentElement.style.setProperty('--sheet-w', Math.round(width) + 'px');
+      }
+      function drop() {
+        document.body.classList.remove('dragging');
+        grip.removeEventListener('pointermove', drag);
+        grip.removeEventListener('pointerup', drop);
+        grip.removeEventListener('pointercancel', drop);
+      }
+      grip.addEventListener('pointermove', drag);
+      grip.addEventListener('pointerup', drop);
+      grip.addEventListener('pointercancel', drop);
+    });
   }
-  window.addEventListener('resize', measure);
-  measure();
 
-  var expand = document.getElementById('expand-all');
-  var collapse = document.getElementById('collapse-all');
-  if (expand) expand.addEventListener('click', function () {
-    files.forEach(function (f) { if (!f.classList.contains('hidden')) f.open = true; });
-  });
-  if (collapse) collapse.addEventListener('click', function () {
-    files.forEach(function (f) { f.open = false; });
-  });
   apply();
 })();
 </script>

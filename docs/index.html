@@ -648,10 +648,10 @@
      )</pre>
     </div>
 
-    <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step. It is one file with the stylesheet inlined — the file icons are drawn into the page and the syntax highlighting is computed when it is written, so nothing is fetched — and it survives being emailed or dropped in a bucket:</p>
+    <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step. It is one file with the stylesheet inlined — the file icons are drawn into the page and the syntax highlighting is computed when it is written, so nothing is fetched — and it survives being emailed or dropped in a bucket. Clicking a file opens its diff in a panel beside the list rather than pushing the list down the page, so the code gets the width it wants and the next file is still one click away:</p>
     <figure class="shot">
-      <img src="examples/report-preview.png" width="2320" height="1520" loading="lazy"
-           alt="The HTML diff report for order-processor v0001 to v0002: a summary rail reading files changed, lines, dependencies, package size, new findings and vendored files; then tables for dependencies, configuration impact and new findings.">
+      <img src="examples/report-preview.png" width="3000" height="1772" loading="lazy"
+           alt="The HTML diff report for order-processor v0001 to v0002: tables for configuration impact and new findings, then the list of changed files with lambda_function.py selected, its diff open in a panel down the right-hand side of the page.">
       <figcaption>lambda-watcher diff order-processor --html · <a href="examples/report/v0001-v0002.html">open the real one</a> · <a href="examples/report/">or its index</a><br>the published copy masks the demo's two fake credentials in the file diff — nothing else is altered</figcaption>
     </figure>
   </section>
