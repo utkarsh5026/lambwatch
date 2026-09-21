@@ -108,44 +108,52 @@ table.grid td.label { width: 210px; color: var(--muted); }
 .tok.removed { background: var(--del-bg); border-color: var(--del-gutter); color: var(--del-fg); }
 
 /* ---- toolbar --------------------------------------------------------- */
-.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;
-  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 5;
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
+  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 6;
   box-shadow: 0 1px 0 var(--border); }
 .toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; color: var(--faint); }
-.toolbar input[type=search] { flex: 1 1 220px; min-width: 140px; padding: 6px 10px; border-radius: 6px;
+.toolbar input[type=search] { flex: 1 1 240px; min-width: 150px; padding: 7px 11px; border-radius: 7px;
   border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px; }
-.toolbar input[type=search]:focus { outline: none; border-color: var(--accent); }
+.toolbar input[type=search]:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash); }
 .toolbar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px;
   align-items: center; cursor: pointer; user-select: none; }
-.toolbar button { padding: 6px 11px; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--muted); font-size: 13px; cursor: pointer; }
-.toolbar button:hover { border-color: var(--faint); color: var(--text); }
 
-/* ---- one file -------------------------------------------------------- */
-details.file { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+/* ---- the file list --------------------------------------------------- */
+/* One panel of rows rather than a stack of cards, because the list is an index
+   now: the diff it points at opens beside it instead of pushing the rest of
+   the list down the page. A row is a button, since that is what it does. */
+.files { border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
   background: var(--panel); }
-details.file[open] { background: var(--bg); }
-details.file > summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 10px;
-  align-items: center; list-style: none; font-size: 13px; border-radius: 7px; }
-details.file > summary::-webkit-details-marker { display: none; }
-details.file > summary:hover { background: var(--panel); }
-/* The header stays put while a long file scrolls past, so the path is still
-   readable eighty lines into its own diff. */
-details.file[open] > summary { position: sticky; top: var(--toolbar-h, 54px); z-index: 3;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border); border-radius: 7px 7px 0 0; }
-summary .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-summary .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.file { border-top: 1px solid var(--rule); }
+/* Transparent rather than absent so every row is the same height, whichever
+   one the filter left at the top. */
+.file:first-child, .file.first-shown { border-top-color: transparent; }
+.row { display: flex; gap: 10px; align-items: center; width: 100%; padding: 9px 14px;
+  font: inherit; color: var(--text); text-align: left; background: none; border: 0;
+  cursor: pointer; }
+.row:hover { background: var(--sunken); }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* The chevron points where the diff will appear: to the side, not downwards.
+   Drawn in CSS because a vendored diff runs to thousands of rows, and each one
+   would otherwise carry its own copy of the glyph. */
+.row::after { content: ""; flex: 0 0 auto; width: 6px; height: 6px; margin-left: 2px;
+  border: 1.6px solid var(--faint); border-left: 0; border-bottom: 0;
+  transform: rotate(45deg); transition: transform .15s ease, border-color .15s ease; }
+.row:hover::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
+.file.active .row { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
+.file.active .row::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
+.row .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.row .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 /* The tint hugs the changed part exactly — padding here would open a gap in
    the middle of a path and read as though the name contained a space. */
-summary .path .ren { background: var(--sunken); border-radius: 3px; }
-summary .path .was { color: var(--faint); }
-summary .stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
+.path .ren { background: var(--sunken); border-radius: 3px; }
+.path .was { color: var(--faint); }
+.stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
   display: flex; gap: 8px; align-items: baseline; color: var(--faint); }
 
 /* ---- the diff itself ------------------------------------------------- */
 .diff { overflow-x: auto; border-top: 1px solid var(--border); }
-details.file[open] > .diff { border-top: none; }
 .diff table { border-collapse: collapse; width: 100%; font-family: var(--mono);
   font-size: 12.5px; line-height: 1.5; }
 .diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
@@ -172,6 +180,20 @@ details.file[open] > .diff { border-top: none; }
 .wd { border-radius: 3px; }
 tr.add .wd { background: var(--add-word); }
 tr.del .wd { background: var(--del-word); }
+/* A file with no usable lines: one row per changed run, the unchanged text
+   either side dimmed so the eye lands on the part that moved. Shares the add
+   and delete colours with the table above so the two read as one legend. */
+.stat-line .skipped { color: var(--faint); font-style: italic; }
+.wordedit { overflow-x: auto; border-top: 1px solid var(--border); }
+.wordedit table { border-collapse: collapse; width: 100%; font-family: var(--mono);
+  font-size: 12px; line-height: 1.7; }
+.wordedit td { padding: 1px 8px; white-space: pre; vertical-align: top; }
+.wordedit td.at { width: 1%; text-align: right; color: var(--faint);
+  background: var(--sunken); border-right: 1px solid var(--border); }
+.wordedit td.run { width: 100%; color: var(--faint); }
+.wordedit .was { background: var(--del-word); color: var(--del-fg); border-radius: 3px; }
+.wordedit .was.gone { text-decoration: line-through; }
+.wordedit .now { background: var(--add-word); color: var(--add-fg); border-radius: 3px; }
 .tk-c { color: var(--tk-c); font-style: italic; }
 .tk-k { color: var(--tk-k); }
 .tk-s { color: var(--tk-s); }
@@ -188,6 +210,96 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
 .moved-list { margin: 0; padding: 10px 16px 12px 34px; list-style: disc;
   color: var(--muted); font-size: 12px; line-height: 1.9; }
 .moved-list .hint { color: var(--faint); }
+/* ---- the sheet ------------------------------------------------------- */
+/* Where the diff lands when a row is clicked. Code wants width, and a block
+   that opened downwards spent the page's widest dimension on the file list it
+   had just pushed out of view; this keeps the list where it was, so the next
+   file is one click away rather than one scroll back.
+
+   A wide window docks the sheet and the page makes room beside it. A narrow
+   one slides it over the page with a scrim, because a laptop in portrait has
+   no room to dock and half a diff is worse than a covered list. */
+:root { --sheet-w: 760px; }
+.scrim { position: fixed; inset: 0; z-index: 30; background: rgba(8, 13, 20, .44);
+  opacity: 0; visibility: hidden; transition: opacity .26s ease, visibility 0s linear .26s; }
+body.sheet-open .scrim { opacity: 1; visibility: visible; transition: opacity .26s ease; }
+.sheet { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+  width: min(100%, var(--sheet-w)); display: flex; flex-direction: column;
+  background: var(--bg); border-left: 1px solid var(--border);
+  box-shadow: -24px 0 60px -30px rgba(6, 11, 18, .5);
+  /* `visibility` rather than `display`, so the sheet can animate out and still
+     leave nothing behind for the keyboard to land on while it is shut. It turns
+     visible on the same frame it is asked to — a transition would leave it
+     unfocusable for the length of the slide, which is exactly when the script
+     is moving focus into it — and back to hidden only once the slide is over. */
+  transform: translateX(100%); visibility: hidden;
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1), visibility 0s linear .26s; }
+body.sheet-open .sheet { transform: none; visibility: visible;
+  transition: transform .26s cubic-bezier(.22, .61, .36, 1); }
+.sheet-head { padding: 12px 14px 11px; border-bottom: 1px solid var(--border);
+  background: var(--panel); display: flex; flex-direction: column; gap: 7px; }
+.sheet-bar { display: flex; align-items: center; gap: 10px; }
+.sheet-title { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.sheet-title .path { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sheet-title .p { font-family: var(--mono); font-size: 13px; font-weight: 600;
+  overflow-wrap: anywhere; }
+/* Wrapping rather than clipping: a file whose counts are a sentence — "missing
+   from the archive" — is exactly the one whose reader needs to read them. */
+.sheet-sub { display: flex; align-items: baseline; gap: 12px; min-height: 18px;
+  flex-wrap: wrap; color: var(--faint); font-size: 12px; }
+.sheet-sub .ver { margin-left: auto; font-family: var(--mono); white-space: nowrap; }
+.sheet-nav { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.sheet-nav .pos { color: var(--faint); font-size: 12px; padding: 0 3px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.iconbtn { display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid transparent;
+  background: none; color: var(--muted); cursor: pointer; }
+.iconbtn:hover:not(:disabled) { background: var(--sunken); border-color: var(--border);
+  color: var(--text); }
+.iconbtn:disabled { opacity: .3; cursor: default; }
+.iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.iconbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.iconbtn.close { margin-left: 5px; }
+.sheet-body { flex: 1; overflow: auto; overscroll-behavior: contain; }
+.sheet-body:focus { outline: none; }
+/* The panel's own top rule would double the header's. */
+.sheet-body > .body > :first-child { border-top: none; }
+/* One file wants sixty columns and the next wants two hundred, and which one
+   is on screen is not something the page can know — so the edge is draggable
+   wherever there is a pointer and room to dock. */
+.grip { position: absolute; left: 0; top: 0; bottom: 0; width: 11px; display: none;
+  cursor: col-resize; }
+.grip::before { content: ""; position: absolute; left: 4px; top: 50%; width: 3px; height: 44px;
+  margin-top: -22px; border-radius: 3px; background: var(--border); transition: background .15s; }
+.grip:hover::before, body.dragging .grip::before { background: var(--accent); }
+body.dragging { user-select: none; cursor: col-resize; }
+body.dragging, body.dragging .sheet { transition: none; }
+
+@media (min-width: 1280px) {
+  :root { --sheet-w: min(50vw, 960px); }
+  .scrim { display: none; }
+  .grip { display: block; }
+  body { transition: padding-right .26s cubic-bezier(.22, .61, .36, 1); }
+  body.sheet-open { padding-right: min(var(--sheet-w), 76vw); }
+}
+/* Nothing to dock into: the sheet is over the page, so the page stops scrolling
+   underneath it. */
+@media (max-width: 1279.98px) {
+  body.sheet-open { overflow: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body, .sheet, .scrim, .row::after { transition: none; }
+}
+/* On paper there is no clicking, so every diff is printed under its own row and
+   the chrome that only answers a pointer is left out. */
+@media print {
+  .toolbar, .scrim, .sheet-nav, .grip { display: none !important; }
+  .sheet { position: static; transform: none; visibility: visible; width: auto;
+    border-left: 0; box-shadow: none; }
+  body.sheet-open { padding-right: 0; overflow: visible; }
+  .file .body[hidden] { display: block; }
+}
 .hidden { display: none !important; }
 </style>
 </head>
@@ -203,9 +315,9 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
       <th class="num">files</th><th class="num">size</th>
       <th>downloaded as</th><th>change from previous</th>
     </tr></thead>
-    <tbody><tr><td class="mono"><strong>v0002</strong></td><td>2026-09-06 19:55</td><td class="mono">python</td><td class="mono">lambda_function.lambda_handler</td><td class="num">68</td><td class="num">9.2 KB</td><td class="mono sub">order-processor (1).zip</td><td><a href="v0001-v0002.html">2 added, 2 modified, 9 renamed, 55 vendored</a></td></tr><tr><td class="mono"><strong>v0001</strong></td><td>2026-09-06 19:55</td><td class="mono">python</td><td class="mono">lambda_function.lambda_handler</td><td class="num">61</td><td class="num">8.3 KB</td><td class="mono sub">order-processor.zip</td><td><span class="sub">first version</span></td></tr></tbody>
+    <tbody><tr><td class="mono"><strong>v0002</strong></td><td>2026-09-21 10:45</td><td class="mono">python</td><td class="mono">lambda_function.lambda_handler</td><td class="num">68</td><td class="num">9.2 KB</td><td class="mono sub">order-processor (1).zip</td><td><a href="v0001-v0002.html">2 added, 2 modified, 9 renamed, 55 vendored</a></td></tr><tr><td class="mono"><strong>v0001</strong></td><td>2026-09-21 10:45</td><td class="mono">python</td><td class="mono">lambda_function.lambda_handler</td><td class="num">61</td><td class="num">8.3 KB</td><td class="mono sub">order-processor.zip</td><td><span class="sub">first version</span></td></tr></tbody>
   </table></div>
-  <footer>Generated by lambda-watcher on 2026-09-06 19:55.</footer>
+  <footer>Generated by lambda-watcher on 2026-09-21 10:45.</footer>
 </div>
 </body>
 </html>

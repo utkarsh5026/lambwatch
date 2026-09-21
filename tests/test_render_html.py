@@ -23,7 +23,14 @@ from lambda_watcher.diffing.highlight import (
     highlight_lines,
     language_of,
 )
-from lambda_watcher.diffing.render_html import CSS, _Row, _row_code, render_html
+from lambda_watcher.diffing.render_html import (
+    CSS,
+    JS,
+    NOSCRIPT,
+    _Row,
+    _row_code,
+    render_html,
+)
 from lambda_watcher.ingest import Ingestor
 from lambda_watcher.utils import LANG_BY_EXT
 
@@ -371,3 +378,124 @@ def test_the_report_paints_the_code_and_carries_one_sprite(cfg, db, ingestor: In
     assert 'colspan="4"' in page and 'colspan="3"' not in page
     # Still one file, no network.
     assert "http://" not in page and "https://" not in page
+
+
+# --------------------------------------------------- the list and the sheet
+# A file's diff opens beside the list rather than under it, which makes the
+# page three things that have to agree: markup the script can find, a script
+# that moves exactly one diff into the sheet, and a stylesheet that draws the
+# states the script sets. Nothing here can see a browser, so these pin down the
+# contract between the three — the failures that reach a reader as a row that
+# does nothing when clicked.
+def _report(cfg, db, ingestor, make_zip) -> str:
+    """A rendered report listing a first-party file and a vendored one.
+
+    Listing the vendored file is what puts the "show vendored files" box on the
+    page, so this is the page that carries every control the script binds to.
+    """
+    ingestor.ingest(make_zip("fn.zip", {
+        "lambda_function.py": PY_V1, "site-packages/boto3/__init__.py": "V = '1.34.0'\n"}))
+    ingestor.ingest(make_zip("fn.zip", {
+        "lambda_function.py": PY_V2, "site-packages/boto3/__init__.py": "V = '1.35.20'\n"}))
+    return render_html(_diff(cfg, db, ingestor, include_vendor=True))
+
+
+def test_a_file_is_a_row_with_its_diff_parked_behind_it(cfg, db, ingestor: Ingestor, make_zip):
+    """The row is what the reader scans; the diff travels with it, hidden until asked for.
+
+    Hidden in the markup rather than absent from it is what keeps the page one
+    file: there is nothing to fetch when a row is clicked, and a browser with
+    no script still has every diff on the page.
+    """
+    page = _report(cfg, db, ingestor, make_zip)
+
+    assert '<article class="file"' in page
+    assert '<button class="row" type="button" aria-expanded="false" aria-controls="sheet">' in page
+    assert '<div class="body" hidden>' in page
+    # One body per block, each holding that block's diff and nothing else, so
+    # no diff is on the page twice for the script to pick the wrong copy of.
+    assert page.count('<div class="body" hidden>') == page.count('<article class="file"') == 2
+    assert page.count('<div class="body" hidden><div class="diff">') == 2
+    # The block that opened downwards is gone, markers and all.
+    assert "<details" not in page and "<summary" not in page
+
+
+def test_the_page_carries_exactly_one_sheet(cfg, db, ingestor: Ingestor, make_zip):
+    """One frame for every row to open into, outside the list the script moves diffs out of.
+
+    A sheet per file would repeat the diff, and a sheet nested in the list
+    would be hidden by the filter that hides its row.
+    """
+    page = _report(cfg, db, ingestor, make_zip)
+
+    assert page.count('id="sheet"') == 1
+    assert page.count('id="sheet-body"') == 1
+    assert page.index('class="files"') < page.index('class="sheet"')
+    # The versions being compared are named in the sheet too: it covers the
+    # page header outright on a window too narrow to dock it.
+    assert 'class="ver">v0001 → v0002</span>' in page
+
+
+def test_every_handle_the_script_reaches_for_is_on_the_page(cfg, db, ingestor: Ingestor,
+                                                            make_zip):
+    """The script finds the page by id, so a rename on either side is a dead row.
+
+    Nothing raises when it happens — ``getElementById`` answers null and the
+    listener is never attached — so clicking a file would quietly do nothing.
+    """
+    page = _report(cfg, db, ingestor, make_zip)
+
+    wanted = set(re.findall(r"getElementById\('([^']+)'\)", JS))
+    assert wanted, "no ids parsed out of the script"
+    for ident in sorted(wanted):
+        assert f'id="{ident}"' in page, f"the script looks up #{ident}, which nothing renders"
+
+
+def test_every_state_the_script_sets_is_drawn(cfg, db, ingestor: Ingestor, make_zip):
+    """A class the stylesheet has no rule for is a state the reader cannot see."""
+    for css_class in ("hidden", "first-shown", "active", "sheet-open", "dragging"):
+        assert f"classList.toggle('{css_class}'" in JS or f"classList.add('{css_class}'" in JS
+        assert f".{css_class}" in CSS, f"the script sets .{css_class} and nothing draws it"
+
+
+def test_the_sheet_says_which_key_does_what(cfg, db, ingestor: Ingestor, make_zip):
+    """A shortcut on a page with no menu is only discoverable from the control it doubles."""
+    page = _report(cfg, db, ingestor, make_zip)
+
+    for key, action in (("j", "Next file"), ("k", "Previous file"), ("Esc", "Close")):
+        assert f'title="{action} ({key})"' in page
+        assert f'aria-label="{action} ({key})"' in page
+
+
+def test_without_a_script_the_diffs_are_still_readable(cfg, db, ingestor: Ingestor, make_zip):
+    """No script means no sheet, so the diffs go back to sitting under their own rows.
+
+    The alternative is a page of rows that do nothing when clicked, with every
+    diff on it and no way to reach one.
+    """
+    page = _report(cfg, db, ingestor, make_zip)
+
+    assert "<noscript><style>" in page
+    assert ".file .body[hidden] { display: block; }" in NOSCRIPT
+    # ...and the controls that only a script can answer are taken off the page.
+    assert ".toolbar, .sheet, .scrim { display: none; }" in NOSCRIPT
+
+
+def test_a_report_with_nothing_to_list_offers_nothing_to_filter(cfg, db, ingestor: Ingestor,
+                                                                make_zip):
+    """Two versions differing only outside the file tree still land on a page that reads.
+
+    A search box over an empty list invites the reader to narrow it further,
+    which is the opposite of what the sentence under it is telling them.
+    """
+    # A dependency bump and nothing else: the vendored files that changed are
+    # hidden by default, and the dependency table above has already explained
+    # them, so the list itself has nothing left to show.
+    ingestor.ingest(make_zip("fn.zip", {
+        "lambda_function.py": PY_V1, "site-packages/boto3/__init__.py": "V = '1.34.0'\n"}))
+    ingestor.ingest(make_zip("fn.zip", {
+        "lambda_function.py": PY_V1, "site-packages/boto3/__init__.py": "V = '1.35.20'\n"}))
+    page = render_html(_diff(cfg, db, ingestor))
+
+    assert '<div class="empty">' in page
+    assert 'id="filter"' not in page and 'class="files"' not in page
