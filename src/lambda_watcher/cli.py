@@ -1503,7 +1503,11 @@ def diff(
         target = Path(output).expanduser() if output else (
             cfg.reports_dir / f"{slugify(row['name'])}-v{a_seq:04d}-v{b_seq:04d}.html"
         )
-        write_html(result, target)
+        # --output can put the page anywhere, so the top bar links the archive
+        # index only when the page sits beside it in reports/.
+        archive_index = cfg.reports_dir / "index.html"
+        write_html(result, target,
+                   archive_href="index.html" if output is None and archive_index.exists() else None)
         console.print(f"[green]wrote[/green] {target}")
         if open_report and not _open_in_browser(target):
             err_console.print("[yellow]could not find a browser to show it in; "
@@ -1616,6 +1620,9 @@ def report(
 
     entries: list[dict] = []
     seqs = [int(v["seq"]) for v in selected]
+    # Under reports/<slug>/ the archive index is one level up, and the
+    # _refresh_archive_index below writes it; --output leaves no such guarantee.
+    archive_href = "../index.html" if output is None else None
     include_vendor = True if vendor else None
 
     for version in selected:
@@ -1635,13 +1642,14 @@ def report(
             a_seq = max(previous)
             pair = _build_diff(db, store, cfg, row, a_seq, seq, include_vendor)
             filename = f"v{a_seq:04d}-v{seq:04d}.html"
-            write_html(pair, target_dir / filename)
+            write_html(pair, target_dir / filename, archive_href=archive_href,
+                       history_href="index.html")
             entry["diff_href"] = filename
             entry["diff_summary"] = pair.headline()
         entries.append(entry)
 
     index = target_dir / "index.html"
-    index.write_text(render_timeline(row["name"], entries), encoding="utf-8")
+    index.write_text(render_timeline(row["name"], entries, archive_href=archive_href), encoding="utf-8")
     console.print(f"[green]wrote[/green] {index} [dim]({len(entries)} versions)[/dim]")
     if output is None:
         _refresh_archive_index(cfg, db)
