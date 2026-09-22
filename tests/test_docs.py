@@ -53,8 +53,12 @@ _VARIABLE = [
     # The banner carries the version, which moves with every release while the
     # captures around it do not. Pinning it here would make a version bump a
     # documentation edit, and the captures are demonstrating the watcher's
-    # output rather than which release printed it.
-    (re.compile(r"^lambda-watcher \d+\.\d+\.\d+\S*(?= — archiving into)"), "lambda-watcher <version>"),
+    # output rather than which release printed it. This matched only the
+    # watcher's own `— archiving into` banner until `setup`, `status` and `demo`
+    # grew banners of their own, and the 0.3.0 → 0.4.0 bump duly failed three
+    # lines on the site; `test_a_version_bump_is_not_a_documentation_edit`
+    # is what keeps a sixth banner from doing it again.
+    (re.compile(r"^lambda-watcher \d+\.\d+\.\d+\S*"), "lambda-watcher <version>"),
 ]
 
 
@@ -131,6 +135,44 @@ def _assert_all_produced(blocks: dict[str, list[str]], captures: set[str], where
         f"Regenerate with `python {BUILDER.relative_to(REPO)}`:\n  "
         + "\n  ".join(invented[:15])
     )
+
+
+def _banner_suffixes() -> set[str]:
+    """What each ``lambda-watcher <version>`` banner in ``cli.py`` prints after the version.
+
+    ``setup`` follows it with ``— setting up``, ``demo`` with ``— a demo, on a
+    sample Lambda``, the watcher with ``— archiving into <root>``; ``status`` and
+    ``--version`` print the version and stop. Reading the suffixes out of the
+    source rather than listing them here is the point: a sixth banner added later
+    lands in this set without anyone remembering to add it.
+    """
+    source = (REPO / "src" / "lambda_watcher" / "cli.py").read_text(encoding="utf-8")
+    found = re.findall(r"lambda-watcher(?:\[/bold\])? \{__version__\}([^\"\n]*)", source)
+    # The suffixes come from source text, so a trailing newline is the two
+    # characters `\` and `n`, and `{cfg.root}` is still an unfilled f-string slot.
+    return {re.sub(r"\{[^}]+\}", "~/.lambda-watcher", s).removesuffix(r"\n") for s in found}
+
+
+def test_a_version_bump_is_not_a_documentation_edit() -> None:
+    """Every banner's version normalises away in :func:`_comparable`, not just the watcher's.
+
+    ``_VARIABLE`` matched the ``— archiving into`` banner alone, so the ``setup``,
+    ``status`` and ``demo`` captures kept a literal ``0.3.0`` on the site and the
+    0.4.0 bump failed :func:`test_site_terminal_blocks_are_real_output` on every
+    POSIX leg — which is the whole suite the release workflow re-runs before it
+    publishes, so a version bump could not ship itself. Which release printed a
+    capture is not what the capture demonstrates; a banner that survives here is
+    one that breaks the next release instead.
+    """
+    suffixes = _banner_suffixes()
+    assert suffixes, "no version banners found in cli.py — has the banner moved?"
+
+    for suffix in suffixes:
+        banner = f"lambda-watcher 9.9.9{suffix}"
+        assert "9.9.9" not in _comparable(banner), (
+            f"{banner!r} keeps its version through _comparable(), so the next "
+            "release turns this capture into a documentation edit"
+        )
 
 
 @posix_only
