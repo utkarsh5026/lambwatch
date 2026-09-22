@@ -54,6 +54,9 @@ What that means concretely, and what to preserve:
   comparison during ingest (`Ingestor._render_report`, gated on `report.auto_diff`) into
   `reports/<function>/latest.html`, because nobody is watching a terminal when a background
   service archives something. Rendering must never fail an ingest that already succeeded.
+  `reports/index.html` links them all (`diffing.build.write_archive_index`): the ingest
+  rewrites it, bare `lw report` writes and opens it, and every command that changes what it
+  lists keeps it current through `cli._refresh_archive_index`.
 - **Every error names the next command.** `_fail` messages, empty states and `doctor` rows all
   end in something the reader can type. A message that only reports a state is half-written.
 - **One name in user-facing text: `lw`.** `lambda-watcher` stays the package and the prose name
@@ -65,6 +68,12 @@ What that means concretely, and what to preserve:
 - **A new command needs a panel and, if it takes a function name,
   `autocompletion=_complete_function`.** The completer must never raise: it runs inside the
   user's shell on every TAB.
+- **A new command also needs an entry in `helptext.COMMANDS`**, wired in with
+  `**for_command("<name>")` on its decorator: a summary, a plain explanation and worked
+  examples, which `lw <command> --help` draws in an Examples panel. The command's docstring is
+  for maintainers and never reaches the terminal. [tests/test_helptext.py](tests/test_helptext.py)
+  parses every example against the command it names, so an example that names a renamed
+  option fails the suite.
 
 ## Write code a stranger can read
 
@@ -244,14 +253,28 @@ Every terminal block in [README.md](README.md) and on the Pages site
 builds a demo `order-processor` Lambda, runs the real pipeline over it and prints one capture per
 command; [tests/test_docs.py](tests/test_docs.py) re-runs it and fails if any documented line is not
 one the tool printed. So **changing renderer output means regenerating the docs**, not hand-editing
-them: run the builder, copy the block back. Timestamps, git commit ids and the free space `doctor`
-reports are the only parts allowed to vary. The capture comparison is POSIX-only — Rich substitutes
-box characters on Windows consoles by design — while the structural checks run on every leg.
+them: run the builder, copy the block back. Timestamps, relative times ("just now"), git commit ids
+and the free space `doctor` reports are the only parts allowed to vary. The capture comparison is
+POSIX-only — Rich substitutes box characters on Windows consoles by design — while the structural
+checks run on every leg.
 
-The demo zips are written with a pinned build stamp so version directories are stable
-(`0001-bd9f77c8`, `0002-73d375ad`) and the docs can quote them. `--publish` refreshes
-`docs/examples/report/`, the live HTML report the site links to. Credential-shaped fixtures use the
-same runtime-assembly trick as `conftest.fake_secret()`.
+**Coverage is checked in both directions.** Every command the site advertises must exist, and every
+registered command must be named by a site reference entry (its `cmd__name` or `cmd__what`) and have
+a row in the README's command table. A new command therefore needs a captured site entry and a README
+row before the suite passes — a mention inside another command's output does not count.
+
+The sample Lambda itself lives in [src/lambda_watcher/demo.py](src/lambda_watcher/demo.py), not in the
+docs harness, because `lw demo` ships it to people who installed from PyPI and have no checkout. The
+builder imports it, so the two cannot drift. The zips are written with a pinned build stamp so version
+directories are stable (`0001-7fc98e0e`, `0002-7f887035`) and the docs can quote them. `--publish`
+refreshes `docs/examples/report/`, the live HTML report the site links to. Credential-shaped fixtures
+use the same runtime-assembly trick as `conftest.fake_secret()`.
+
+**Never capture a command that touches the machine outside the sandbox.** `start`, `stop` and
+`restart` register a real OS service, so the builder does not run them; they are documented in the
+`setup` entry's description instead. On POSIX every service manager keeps its state under `$HOME` or
+the archive root, both of which the builder redirects, so the other captures cannot see a real
+installed watcher.
 
 ## Tests
 

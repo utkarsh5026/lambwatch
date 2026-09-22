@@ -422,7 +422,7 @@
     <span class="eyebrow">lambda-watcher</span>
     <h1>From a zip in Downloads to a diffable version</h1>
     <p class="standfirst">You keep downloading Lambda deployment packages as backups. Eight steps later, each one is an archived version with a manifest, a database row, and a git tag — and you can finally answer “what changed between the 2nd one and the 10th?”</p>
-    <div class="install"><b>pipx install lambda-watcher</b>   <i># then:</i>  <b>lambda-watcher watch</b></div>
+    <div class="install"><b>pipx install lambda-watcher</b>   <i># then:</i>  <b>lw setup</b></div>
     <div class="mast-meta">
       <span><b>Trigger</b> a .zip lands in ~/Downloads</span>
       <span><b>Result</b> version N, archived and indexed</span>
@@ -576,7 +576,7 @@
     <div class="tree">~/.lambda-watcher/
 ├── <b>index.db</b>                        <i># rebuildable index — never the source of truth</i>
 ├── logs/watcher.log
-├── reports/                        <i># generated HTML, once you ask for it</i>
+├── reports/                        <i># generated HTML; index.html links it all</i>
 ├── repos/
 │   └── <b>order-processor</b>/            <i># git mirror: one commit per version, tagged v0001…</i>
 └── functions/
@@ -648,7 +648,7 @@
      )</pre>
     </div>
 
-    <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step. It is one file with the stylesheet inlined — the file icons are drawn into the page and the syntax highlighting is computed when it is written, so nothing is fetched — and it survives being emailed or dropped in a bucket. Clicking a file opens its diff in a panel beside the list rather than pushing the list down the page, so the code gets the width it wants and the next file is still one click away:</p>
+    <p>The same comparison renders as a self-contained HTML page, which is the one to send to someone else — <code>--html --open</code> on any diff, or <code>lw report</code> for the whole history with a page per step, which opens in your browser by itself. It is one file with the stylesheet inlined — the file icons are drawn into the page and the syntax highlighting is computed when it is written, so nothing is fetched — and it survives being emailed or dropped in a bucket. Clicking a file opens its diff in a panel beside the list rather than pushing the list down the page, so the code gets the width it wants and the next file is still one click away:</p>
     <figure class="shot">
       <img src="examples/report-preview.png" width="3000" height="1772" loading="lazy"
            alt="The HTML diff report for order-processor v0001 to v0002: tables for configuration impact and new findings, then the list of changed files with lambda_function.py selected, its diff open in a panel down the right-hand side of the page.">
@@ -658,17 +658,76 @@
 
   <section>
     <h2 id="commands"><span class="h2-num">IN PRACTICE</span>The commands you’d actually use</h2>
-    <p class="lede">Start the watcher once and leave it; everything else is reading what it archived. Every command below is expanded with the output it actually prints — these are captures, not sketches.</p>
+    <p class="lede">Run <code>lw setup</code> once and leave it; everything else is reading what it archived. Every command below is expanded with the output it actually prints — these are captures, not sketches.</p>
 
     <p><code>show</code> is the one to reach for first, and the line worth noticing in it is <code>2 declared, 3 installed</code>: <code>requirements.txt</code> names two packages and three arrived in the zip. The third came along as a transitive dependency, and it is the installed list — not the declared one — that describes what actually ran.</p>
 
     <div class="cmdlist">
       <details class="cmd" open>
-        <summary><span class="cmd__name">lw watch</span><span class="cmd__what">Watch the download folders and archive everything that lands. Leave it running.</span></summary>
+        <summary><span class="cmd__name">lw setup</span><span class="cmd__what">Everything in one go: a config, the background watcher, and any history already on disk. After that, <code>lw start</code>, <code>lw stop</code> and <code>lw restart</code> manage the watcher on their own.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher setup --no-service</span>
+<pre>lambda-watcher 0.3.0 — setting up
+
+  ✓ wrote ~/.lambda-watcher/config.yaml
+  ✓ archive at ~/.lambda-watcher
+  ✓ watching ~/Downloads
+
+  found 3 zip(s) already in your download folder(s)
+  run lw backfill ~/Downloads to archive them
+
+Skipping the background watcher. Run lw watch when you want it, or lw start to install it later.
+
+That is the whole setup. Download a Lambda zip as you normally would; run lw to see what it caught.
+
+  lw demo                   see what it does now, on a sample Lambda
+  lw --install-completion   tab-complete function names in your shell</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw status</span><span class="cmd__what">Is it running, and what has it caught? This is also what plain <code>lw</code> prints.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher status</span>
+<pre>lambda-watcher 0.3.0
+
+  ○ not watching   ~/Downloads is not being archived
+    1 function · 2 versions · 17.5 KB in ~/.lambda-watcher
+
+  order-processor    v0002    just now    python  
+
+  reports: ~/.lambda-watcher/reports/index.html · lw report
+
+  lw setup                    watch your downloads folder from now on
+  lw diff "order-processor"   what changed in the last version</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw demo</span><span class="cmd__what">See the whole thing work on a sample Lambda, in a scratch archive of its own — nothing appears in yours. It goes on to print the comparison <code>lw diff</code> would, and where the HTML page is.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher demo --no-open</span>
+<pre>lambda-watcher 0.3.0 — a demo, on a sample Lambda
+
+Three downloads of order-processor land in a scratch Downloads folder: a release, the next release, and that release downloaded again.
+
+               new  order-processor v0001  order-processor.zip — archived a new version
+               new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 9 renamed, 55 vendored
+                    +24/-5 lines · new: 1 env var, 1 AWS service, 3 secrets
+                    report: ~/.lambda-watcher/demo/reports/order-processor/v0001-v0002.html
+         unchanged  order-processor v0002  order-processor (2).zip — identical to version 2</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw watch</span><span class="cmd__what">The same watcher in the foreground, printing each download as it lands; Ctrl-C stops it. <code>lw setup</code> runs it in the background instead.</span></summary>
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher watch</span>
-<pre>lambda-watcher 0.2.0 — archiving into ~/.lambda-watcher
+<pre>lambda-watcher 0.3.0 — archiving into ~/.lambda-watcher
 watching ~/Downloads. Press Ctrl-C to stop.
                new  order-processor v0001  order-processor.zip — archived a new version
                new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 9 renamed, 55 vendored
@@ -693,17 +752,19 @@ Next: lw start</pre>
         </div>
       </details>
       <details class="cmd">
-        <summary><span class="cmd__name">lw doctor</span><span class="cmd__what">Check the config, watch folders, store, git and disk space before you rely on it.</span></summary>
+        <summary><span class="cmd__name">lw doctor</span><span class="cmd__what">Check the config, watch folders, the watcher and its heartbeat, git and disk space. Every problem names its fix, and it exits nonzero when there is one.</span></summary>
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher doctor</span>
-<pre>check         status  detail                                                  
-config file   ok      ~/.lambda-watcher/config.yaml  
-archive root  ok      ~/.lambda-watcher              
-watch dir     ok      ~/Downloads                    
-git mirror    ok      enabled                                                 
-index         ok      0 function(s), 0 version(s)                             
-disk free     ok      29.6 GB                                                 </pre>
+<pre>check         status         detail                                                  what to do  
+config file   ok             ~/.lambda-watcher/config.yaml              
+archive root  ok             ~/.lambda-watcher                          
+watch dir     ok             ~/Downloads                                
+watcher       not installed  nothing is archiving in the background                  lw setup    
+heartbeat     none           the watcher has not reported in                                     
+git mirror    ok             enabled                                                             
+index         ok             0 function(s), 0 version(s)                                         
+disk free     ok             899.4 GB                                                            </pre>
           </div>
         </div>
       </details>
@@ -831,7 +892,7 @@ Files
         </div>
       </details>
       <details class="cmd">
-        <summary><span class="cmd__name">lw report FN</span><span class="cmd__what">Build a browsable HTML history: an index plus a diff for every step.</span></summary>
+        <summary><span class="cmd__name">lw report [FN]</span><span class="cmd__what">Build a browsable HTML history: an index plus a diff for every step, and open it in your browser. Without <code>FN</code>, one page linking every function instead.</span></summary>
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher report order-processor</span>
@@ -921,6 +982,20 @@ order-processor  v0001    boto3    1.34.0</pre>
         </div>
       </details>
       <details class="cmd">
+        <summary><span class="cmd__name">lw logs</span><span class="cmd__what">The watcher's own log file — what it noticed and what it made of it. <code>-f</code> follows it; <code>--service</code> shows the service manager's output instead.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher logs -n 4</span>
+<pre>~/.lambda-watcher/logs/watcher.log
+
+2026-09-22 09:32:17 INFO    archived order-processor v0002 (68 files, 9.2 KB)
+2026-09-22 09:32:17 INFO    order-processor (2).zip -&gt; function 'order-processor' (known-function, high confidence)
+2026-09-22 09:32:17 INFO    order-processor (2).zip is byte-identical to order-processor v0002 - nothing new to archive
+2026-09-22 09:32:17 INFO    skipping order-processor (2).zip: identical download already archived</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
         <summary><span class="cmd__name">lw label FN V TEXT</span><span class="cmd__what">Annotate a version so you can recognise it later.</span></summary>
         <div class="cmd__out">
           <div class="slab">
@@ -940,11 +1015,30 @@ future downloads containing &#x27;order-proc&#x27; will map here automatically</
         </div>
       </details>
       <details class="cmd">
+        <summary><span class="cmd__name">lw merge SRC DST</span><span class="cmd__what">Fold two entries that are really the same Lambda into one, renumbering by when each version was archived.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher merge order-processor-old order-processor</span>
+<pre>merged order-processor-old into order-processor (3 versions, renumbered by archive time)
+run `lw reindex` if any diffs look wrong</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
         <summary><span class="cmd__name">lw reindex</span><span class="cmd__what">Rebuild <code>index.db</code> from the manifests on disk. The archive is the source of truth.</span></summary>
         <div class="cmd__out">
           <div class="slab">
             <span class="slab-cap">lambda-watcher reindex --yes</span>
 <pre>reindexed 1 function(s), 2 version(s)</pre>
+          </div>
+        </div>
+      </details>
+      <details class="cmd">
+        <summary><span class="cmd__name">lw rm FN</span><span class="cmd__what">Delete a function and everything archived for it, mirror included. <code>--yes</code> skips the question.</span></summary>
+        <div class="cmd__out">
+          <div class="slab">
+            <span class="slab-cap">lambda-watcher rm order-processor --yes</span>
+<pre>deleted order-processor</pre>
           </div>
         </div>
       </details>

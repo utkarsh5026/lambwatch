@@ -158,8 +158,8 @@ restarts it if it crashes — `lw` will tell you if it has stopped.
 
 ## WSL, network drives and VM shares
 
-Native filesystem events do not cross these boundaries reliably. Turn on
-polling:
+Native filesystem events do not cross these boundaries reliably. On a network
+share or a VM mount, turn on polling:
 
 ```yaml
 watch:
@@ -167,14 +167,25 @@ watch:
   polling_interval: 2.0
 ```
 
-If your browser runs on Windows and you want to watch from WSL, point the
-watcher at the Windows folder directly:
+**WSL needs neither setting.** Your browser is a Windows program, so the folder
+that fills up is the Windows one and the Linux `~/Downloads` usually does not
+exist at all — `lw setup` works that out and writes the right folder into your
+config:
 
 ```yaml
 watch:
   dirs: ["/mnt/c/Users/YOU/Downloads"]
-  force_polling: true
 ```
+
+Polling is then chosen for that folder automatically, because a WSL guest
+receives no filesystem events for the Windows drives under `/mnt` — the native
+watcher would attach, report success and never fire. `lw` says which arrangement
+it got. A config written before this was handled keeps working unchanged: the
+folder is recognised on sight, so nothing has to be edited.
+
+If `setup` cannot tell which Windows account is yours — more than one person
+has a profile on the machine — it leaves the folder alone and says which one it
+thinks you want. Set `watch.dirs` yourself and run `lw setup` again.
 
 ---
 

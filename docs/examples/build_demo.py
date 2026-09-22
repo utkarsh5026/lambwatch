@@ -16,248 +16,17 @@ config file arrives carrying credentials nobody meant to commit.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-import time
-import zipfile
 from pathlib import Path
 
+from lambda_watcher.demo import fake_secret, stage_downloads
+
 REPO = Path(__file__).resolve().parents[2]
-
-
-# --------------------------------------------------------------------------- #
-# Credential-shaped fixtures
-#
-# The secret scanner is only worth demonstrating on strings that look real, which
-# also makes them look real to GitHub's push protection. Assembling them from
-# fragments at runtime keeps the literal out of the repository — the same trick
-# tests/conftest.py uses for the same reason.
-# --------------------------------------------------------------------------- #
-def fake_secret(kind: str) -> str:
-    parts = {
-        "aws":    ("AKIA", "IOSFODNN7", "EXAMPLE"),   # AKIA + exactly 16
-        "stripe": ("sk_", "live_", "4eC39HqLyjWDarjtT1zdp7dc"),
-    }[kind]
-    return "".join(parts)
-
-
-# --------------------------------------------------------------------------- #
-# The function, as it looked at v1 and at v2
-# --------------------------------------------------------------------------- #
-HANDLER_V1 = '''\
-"""Validate an incoming order and record it."""
-
-import json
-import os
-
-import boto3
-
-from db import put_order
-
-TABLE_NAME = os.environ["TABLE_NAME"]
-
-dynamodb = boto3.resource("dynamodb")
-table = dynamodb.Table(TABLE_NAME)
-
-
-def lambda_handler(event, context):
-    order = json.loads(event["body"])
-
-    if not order.get("items"):
-        return {"statusCode": 400, "body": json.dumps({"error": "order has no items"})}
-
-    put_order(table, order)
-
-    return {"statusCode": 201, "body": json.dumps({"id": order["id"]})}
-'''
-
-HANDLER_V2 = '''\
-"""Validate an incoming order, record it, and queue it for fulfilment."""
-
-import json
-import os
-
-import boto3
-
-from config import MAX_ITEMS
-from helpers.db import put_order
-
-TABLE_NAME = os.environ["TABLE_NAME"]
-QUEUE_URL = os.environ["QUEUE_URL"]
-
-dynamodb = boto3.resource("dynamodb")
-table = dynamodb.Table(TABLE_NAME)
-sqs = boto3.client("sqs")
-
-
-def lambda_handler(event, context):
-    order = json.loads(event["body"])
-
-    if not order.get("items"):
-        return {"statusCode": 400, "body": json.dumps({"error": "order has no items"})}
-
-    if len(order["items"]) > MAX_ITEMS:
-        return {"statusCode": 422, "body": json.dumps({"error": "too many items"})}
-
-    put_order(table, order)
-    sqs.send_message(QueueUrl=QUEUE_URL, MessageBody=json.dumps(order))
-
-    return {"statusCode": 201, "body": json.dumps({"id": order["id"]})}
-'''
-
-DB_V1 = '''\
-"""Write an order to DynamoDB."""
-
-from decimal import Decimal
-
-
-def put_order(table, order):
-    table.put_item(
-        Item={
-            "id": order["id"],
-            "items": order["items"],
-            "total": Decimal(str(order["total"])),
-        }
-    )
-'''
-
-# Moved to helpers/db.py *and* edited — the case a plain diff reports as an
-# unrelated delete plus add.
-DB_V2 = '''\
-"""Write an order to DynamoDB."""
-
-from decimal import Decimal
-
-
-def put_order(table, order):
-    table.put_item(
-        Item={
-            "id": order["id"],
-            "items": order["items"],
-            "total": Decimal(str(order["total"])),
-            "status": "PENDING",
-        }
-    )
-'''
-
-CONFIG_V2 = f'''\
-"""Runtime configuration.
-
-TODO: move these to Secrets Manager before this goes anywhere near production.
-"""
-
-AWS_ACCESS_KEY_ID = "{fake_secret("aws")}"
-STRIPE_API_KEY = "{fake_secret("stripe")}"
-DEBUG = True
-
-MAX_ITEMS = 50
-'''
-
-METADATA = "Metadata-Version: 2.1\nName: {name}\nVersion: {version}\nSummary: {summary}\n"
-
-# A real wheel installs five files into its .dist-info, not one. Shipping only
-# METADATA made a dependency bump look like a single moved file, which is the
-# one shape the collapsed-move row never fires on — so the demo was quietly
-# showing an easier problem than the tool actually meets.
-WHEEL = "Wheel-Version: 1.0\nGenerator: bdist_wheel (0.43.0)\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
-
-# botocore ships one API model per service, and that is where the bulk of a
-# Python Lambda package actually goes. Carrying a realistic slice of it is the
-# whole point of the "a plain diff is unreadable" example: the noise has to be
-# real noise, not a number asserted in prose.
-BOTOCORE_SERVICES = [
-    "accessanalyzer", "acm", "apigateway", "appconfig", "athena", "autoscaling",
-    "batch", "cloudformation", "cloudfront", "cloudtrail", "cloudwatch", "codebuild",
-    "codepipeline", "cognito-idp", "config", "dynamodb", "dynamodbstreams", "ec2",
-    "ecr", "ecs", "efs", "eks", "elasticache", "elbv2", "events", "firehose",
-    "glue", "iam", "kinesis", "kms", "lambda", "logs", "organizations", "rds",
-    "redshift", "route53", "s3", "sagemaker", "secretsmanager", "servicediscovery",
-    "ses", "sns", "sqs", "ssm", "stepfunctions", "sts", "wafv2", "xray",
-]
-
-
-def vendored(packages: dict[str, tuple[str, str]]) -> dict[str, str]:
-    """Lay out ``site-packages`` the way a built deployment package carries it."""
-    tree: dict[str, str] = {}
-    for name, (version, summary) in packages.items():
-        module = name.replace("-", "_")
-        tree[f"site-packages/{module}/__init__.py"] = f'__version__ = "{version}"\n'
-        dist_info = f"site-packages/{name}-{version}.dist-info"
-        tree[f"{dist_info}/METADATA"] = METADATA.format(
-            name=name, version=version, summary=summary
-        )
-        tree[f"{dist_info}/WHEEL"] = WHEEL
-        tree[f"{dist_info}/INSTALLER"] = "pip\n"
-        tree[f"{dist_info}/top_level.txt"] = f"{module}\n"
-        # RECORD is deliberately left out. A real one is a hash manifest of every
-        # installed file, which cannot be faked into anything meaningful here,
-        # and a stub of it would pair badly and put a spurious "4 of 5" on a
-        # directory that moved whole. The four above are the ones a wheel
-        # installs whose contents this demo can honestly reproduce.
-        if name == "botocore":
-            for service in BOTOCORE_SERVICES:
-                # The endpoint list shifts in most botocore releases, so every one
-                # of these files differs between the two versions — which is
-                # precisely why `diff -rq` is useless here.
-                model = {
-                    "metadata": {
-                        "serviceId": service,
-                        "apiVersion": "2012-08-10",
-                        "botocoreVersion": version,
-                    },
-                    "operations": {},
-                    "shapes": {},
-                }
-                tree[f"site-packages/botocore/data/{service}/2012-08-10/service-2.json"] = (
-                    json.dumps(model, indent=2) + "\n"
-                )
-    return tree
-
-
-V1_FILES = {
-    "lambda_function.py": HANDLER_V1,
-    "db.py": DB_V1,
-    "requirements.txt": "boto3==1.34.0\n",
-    **vendored({
-        "boto3":    ("1.34.0", "The AWS SDK for Python"),
-        "botocore": ("1.34.0", "Low-level, data-driven core of boto 3"),
-    }),
-}
-
-V2_FILES = {
-    "lambda_function.py": HANDLER_V2,
-    "helpers/__init__.py": "",
-    "helpers/db.py": DB_V2,
-    "config.py": CONFIG_V2,
-    "requirements.txt": "boto3==1.35.20\npydantic==2.9.0\n",
-    **vendored({
-        "boto3":    ("1.35.20", "The AWS SDK for Python"),
-        "botocore": ("1.35.20", "Low-level, data-driven core of boto 3"),
-        "pydantic": ("2.9.0",   "Data validation using Python type hints"),
-    }),
-}
-
-
-def write_zip(path: Path, files: dict[str, str], *, built: tuple = (2024, 3, 12, 9, 41, 0)) -> Path:
-    """Write a deployment zip, stamped with an explicit build time.
-
-    ``zipfile.writestr`` would otherwise stamp every member with the current
-    clock, which makes these captures irreproducible. Pinning it also lets the
-    re-download below differ from its original in the one way a real
-    re-download does: same files, later build stamp, different archive bytes.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name, content in sorted(files.items()):
-            info = zipfile.ZipInfo(name, date_time=built)
-            info.external_attr = 0o644 << 16
-            zf.writestr(info, content)
-    return path
 
 
 # --------------------------------------------------------------------------- #
@@ -428,19 +197,21 @@ def main() -> int:
 
     # The four downloads, in the order they would land in ~/Downloads. The last
     # two are the same bytes, so the run ends with one of each outcome.
-    v1 = write_zip(downloads / "order-processor.zip", V1_FILES)
-    v2 = write_zip(downloads / "order-processor (1).zip", V2_FILES)
-    again = write_zip(downloads / "order-processor (2).zip", V2_FILES,
-                      built=(2024, 3, 12, 14, 8, 0))   # same code, packaged again later
+    v1, v2, again = stage_downloads(downloads)
 
-    # Space the downloads out in time. The startup scan replays in mtime order,
-    # and on a filesystem with coarse timestamps three zips written in one burst
-    # share an mtime to the nanosecond - which left the order of the `watch`
-    # capture, and so the version numbers in it, up to directory iteration
-    # order. Hours apart, well inside the scan's 24-hour window.
-    for hours_ago, staged in ((3, v1), (2, v2), (1, again)):
-        stamp = time.time() - hours_ago * 3600
-        os.utime(staged, (stamp, stamp))
+    # ---- first run -----------------------------------------------------------
+    # What someone sees the very first time, so it gets a home that has never
+    # seen the tool: no config yet, and the three zips already sitting in
+    # Downloads for `setup` to offer as history. --no-service because a
+    # capture must never register a real background service on the machine
+    # running this, and the captures would otherwise depend on which one it has.
+    first_home = base / "home-first"
+    (first_home / "Downloads").mkdir(parents=True)
+    for zipped in sorted(downloads.iterdir()):
+        shutil.copy2(zipped, first_home / "Downloads" / zipped.name)
+    first = Runner(first_home, first_home / "Downloads", width=240)
+    capture("setup", "lambda-watcher setup --no-service", first.run("setup", "--no-service"))
+    capture("demo", "lambda-watcher demo --no-open", first.run("demo", "--no-open"))
 
     # ---- intake ------------------------------------------------------------
     capture("init", "lambda-watcher init", wide.run("init"))
@@ -462,6 +233,10 @@ def main() -> int:
             cli.run("ingest", str(v1), str(v2), str(again), str(again)))
     capture("backfill", "lambda-watcher backfill ~/Downloads --dry-run",
             cli.run("backfill", str(downloads), "--dry-run"))
+    # Taken immediately after the ingest, so the dashboard's "when" column still
+    # reads "just now" however slow the machine running this is.
+    capture("status", "lambda-watcher status", cli.run("status"))
+    capture("logs", "lambda-watcher logs -n 4", wide.run("logs", "-n", "4"))
 
     # ---- the problem, measured rather than asserted -------------------------
     versions = sorted((archive / "functions" / "order-processor" / "versions").iterdir())
@@ -513,6 +288,21 @@ def main() -> int:
     capture("rename", "lambda-watcher rename order-processor orders-api --alias order-proc",
             cli.run("rename", "order-processor", "orders-api", "--alias", "order-proc"))
     capture("reindex", "lambda-watcher reindex --yes", cli.run("reindex", "--yes"))
+
+    # `merge` and `rm` get an archive of their own. Both take an archive apart,
+    # and running them after the rename and reindex above would make their
+    # captures depend on how those two interact rather than on what these do.
+    split_home = base / "home-split"
+    (split_home / "Downloads").mkdir(parents=True)
+    split = Runner(split_home, split_home / "Downloads", width=240)
+    split.run("ingest", str(v1), str(v2))
+    # A second entry for the same Lambda, the way a misidentified download makes
+    # one, so that `merge` has something real to fold back in.
+    split.run("ingest", str(v1), "--as", "order-processor-old", "--force")
+    capture("merge", "lambda-watcher merge order-processor-old order-processor",
+            split.run("merge", "order-processor-old", "order-processor"))
+    capture("rm", "lambda-watcher rm order-processor --yes",
+            split.run("rm", "order-processor", "--yes"))
 
     if args.publish:
         publish_report(archive)

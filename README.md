@@ -14,7 +14,7 @@ to how you work. You keep downloading zips; it does the rest.
 
 ```
 $ lambda-watcher watch
-lambda-watcher 0.2.0 — archiving into ~/.lambda-watcher
+lambda-watcher 0.3.0 — archiving into ~/.lambda-watcher
 watching ~/Downloads. Press Ctrl-C to stop.
                new  order-processor v0001  order-processor.zip — archived a new version
                new  order-processor v0002  order-processor (1).zip — 2 added, 2 modified, 9 renamed, 55 vendored
@@ -54,7 +54,8 @@ Then you review:
 lw diff order-processor                    # last two versions, in the terminal
 lw diff order-processor --from 2 --to 10   # any two versions
 lw diff order-processor --html --open      # a shareable HTML report
-lw report order-processor                  # the whole history, browsable
+lw report order-processor                  # the whole history, in your browser
+lw report                                  # every function on one page, in your browser
 lw open order-processor                    # the whole archive, in your editor
 lw git order-processor log -p              # or just use git
 ```
@@ -184,9 +185,16 @@ lw                      # is it running, and what has it caught?
 lw diff order-processor # what changed in the last version
 ```
 
+Nothing to download yet? `lw demo` runs three downloads of a sample Lambda
+through the real pipeline — in a scratch archive of its own, so nothing
+appears in yours — and shows you the diff and the HTML report it produces.
+`lw --install-completion` teaches your shell to tab-complete function names.
+
 Every new version also writes its own comparison to
-`~/.lambda-watcher/reports/<function>/latest.html` as it is archived, so the
-answer is a bookmark rather than a command.
+`~/.lambda-watcher/reports/<function>/latest.html` as it is archived, and
+rewrites `~/.lambda-watcher/reports/index.html`, which links every function's
+latest change and counts the secrets each one ships. The answer is a bookmark
+rather than a command.
 
 <details>
 <summary>Running it by hand, or setting it up piece by piece</summary>
@@ -196,7 +204,8 @@ lw watch      # run in the foreground instead; Ctrl-C stops it
 lw start      # install and start the background watcher
 lw stop       # stop it (--remove also unregisters it)
 lw restart    # after editing the config
-lw doctor     # check the config, watch folders, store, git and disk space
+lw doctor     # check everything, name the fix for each problem, exit 1 if there is one
+lw logs -f    # follow what the watcher is doing right now
 ```
 
 Already have a folder of old backups? Import them oldest-first so the version
@@ -220,6 +229,7 @@ the manual recipes.
 |---|---|
 | `setup` | Config, background watcher and any history already on disk, in one go. `--no-service` skips the background watcher, `--yes` takes every default. |
 | `status` | Is it running, and what has it archived? Also what bare `lw` prints. |
+| `demo` | See it work on a sample Lambda, in a scratch archive of its own. `--open` opens the report; `--clean` removes it. |
 | `start` / `stop` | Register the background watcher with the OS, or stop it. `stop --remove` unregisters it too. |
 | `restart` | Stop and start it — use after editing the config. |
 | `watch` | Watch the download folders in the foreground. `--once` processes what is already there and exits. |
@@ -229,7 +239,7 @@ the manual recipes.
 | `versions FN` | Every archived version of one function. |
 | `show FN [V]` | Runtime, handler, dependencies, env vars, services and findings for one version. `--files`, `--json`. |
 | `diff FN` | Compare two versions. Defaults to the last two. `--from`/`--to`, `--html`, `--open`, `--vendor`, `--whitespace`, `--no-patch`, `--json`. |
-| `report FN` | Build a browsable HTML history: an index plus a diff for every step. |
+| `report FN` | Build a browsable HTML history: an index plus a diff for every step, opened in your browser. `--no-open` just writes it. |
 | `export FN [V]` | Get a version back out as a deployable zip (`--zip`) or a plain folder (`--tree`). |
 | `open FN [V]` | Open the function's mirror in your editor — every version in one folder, with history. Name a version to open just its files. |
 | `git FN ...` | Run git inside that function's mirror repo: `lw git order-processor log --oneline`. |
@@ -237,11 +247,13 @@ the manual recipes.
 | `merge SRC DST` | Combine two entries that are really the same Lambda, renumbering by archive time. |
 | `label FN V TEXT` | Annotate a version, e.g. `label order-processor 7 "prod deploy 2026-03-01"`. |
 | `search TERM` | Search filenames and dependencies across everything archived. |
-| `log` | Recent activity, including downloads that were skipped and why. |
+| `log` | Recent activity, including downloads that were skipped and why, and when the watcher started and stopped. |
+| `logs` | The watcher's own log file — what it noticed and what it made of it. `-f` follows it, `--service` shows the service manager's output instead. |
 | `path FN [V]` | Print a path, for `cd "$(lw path order-processor 7)"`. |
 | `rm FN` | Delete a function and everything archived for it. |
 | `reindex` | Rebuild the SQLite index from the manifests on disk. |
-| `doctor` | Check the config, watch folders, store, git and disk space. |
+| `init` | Write an annotated config file you can edit. `setup` does this for you; `--force` overwrites. |
+| `doctor` | Check the config, watch folders, the watcher and its heartbeat, git and disk space. Every problem names its fix; exits 1 if there is one, so it works from a cron job. |
 
 Version arguments accept `7`, `v7`, `latest`, `first`, or `-1` / `-2` counting
 back from the newest.
@@ -253,7 +265,7 @@ back from the newest.
 ├── config.yaml
 ├── index.db                        # rebuildable index (see `reindex`)
 ├── logs/watcher.log
-├── reports/                        # generated HTML
+├── reports/                        # generated HTML; index.html links it all
 ├── quarantine/                     # archives that failed, with a reason file
 ├── repos/
 │   └── order-processor/            # git mirror: one commit per version, tagged v0001…
@@ -307,7 +319,8 @@ Everything is optional. The settings worth knowing:
 watch:
   dirs: ["~/Downloads"]          # add more if you download from several places
   stable_seconds: 2.0            # how long a file must stop changing before it is read
-  force_polling: false           # turn on for network shares, VM mounts, WSL
+  force_polling: false           # turn on for network shares and VM mounts
+                                 # (WSL is detected and polled without this)
   arrival_max_age_seconds: 300   # ignore "modified" events for files older than this
 
 store:
