@@ -191,10 +191,10 @@ def test_the_fallback_manager_starts_and_stops_a_real_process(cfg: Config, idle_
     manager.uninstall()
     assert not manager.pid_path.exists()
     for _ in range(50):                                # SIGTERM is not instant
-        if not service._pid_alive(started.pid):
+        if not service.pid_alive(started.pid):
             break
         time.sleep(0.1)
-    assert not service._pid_alive(started.pid)
+    assert not service.pid_alive(started.pid)
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="posix signals")
@@ -228,7 +228,7 @@ def test_windows_liveness_asks_tasklist_instead_of_signalling(monkeypatch, listi
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(service.os, "kill", lambda *_a: pytest.fail("signalled a live process"))
     calls = _fake_run(monkeypatch, stdout=listing)
-    assert service._pid_alive(4) is alive
+    assert service.pid_alive(4) is alive
     assert calls[0][0] == "tasklist"
 
 

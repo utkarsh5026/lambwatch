@@ -11,6 +11,7 @@ import shlex
 
 import pytest
 import typer
+from rich.text import Text
 from typer.testing import CliRunner
 
 from lambda_watcher import helptext
@@ -46,10 +47,13 @@ def test_help_ends_in_the_examples(monkeypatch):
     monkeypatch.setenv("COLUMNS", "200")
     result = runner.invoke(app, ["diff", "--help"])
     assert result.exit_code == 0, result.output
-    assert "Examples" in result.output
-    assert "lw diff order-processor --from 3 --to 7" in result.output
+    # Typer forces colour when GITHUB_ACTIONS is set, which splits `--no-patch` in
+    # the options table with escape codes and leaves only the one in the examples.
+    output = Text.from_ansi(result.output).plain
+    assert "Examples" in output
+    assert "lw diff order-processor --from 3 --to 7" in output
     # Below the options rather than above them: the bottom is what stays on screen.
-    assert result.output.index("Examples") > result.output.index("--no-patch")
+    assert output.index("Examples") > output.index("--no-patch")
 
 
 def test_an_explanation_is_left_for_the_terminal_to_wrap():

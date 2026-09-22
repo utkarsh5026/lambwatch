@@ -88,11 +88,22 @@ def _drop_index(home: Path) -> None:
 
 # --------------------------------------------------------------------------- #
 # Edits made now
+#
+# Each rebuild below starts with the index deleted. The recovery path for older
+# archives would otherwise restore a rename or label from the index being
+# replaced, and these would pass without the edit ever reaching a manifest —
+# which is the exact bug. With no index, the disk is all a rebuild can read.
 # --------------------------------------------------------------------------- #
+def _rebuild_from_disk_alone(lw) -> None:
+    """Throw the index away, then rebuild it from what is on disk."""
+    _drop_index(lw.home)
+    lw("reindex", "--yes")
+
+
 @pytest.mark.usefixtures("staged")
 def test_a_rename_survives_a_rebuild(lw):
     lw("rename", "order-processor", "orders-api")
-    lw("reindex", "--yes")
+    _rebuild_from_disk_alone(lw)
     assert _names(lw.home) == ["orders-api"]
     assert "Dependencies" in lw("diff", "orders-api").output     # and its versions still resolve
 
@@ -106,22 +117,26 @@ def test_a_rename_is_on_disk_before_any_rebuild(lw):
 @pytest.mark.usefixtures("staged")
 def test_a_label_survives_a_rebuild(lw):
     lw("label", "order-processor", "2", "prod deploy 2026-03-01")
-    lw("reindex", "--yes")
+    _rebuild_from_disk_alone(lw)
     assert _versions(lw.home, "order-processor")[1][2] == "prod deploy 2026-03-01"
 
 
 @pytest.mark.usefixtures("staged")
 def test_clearing_a_label_survives_a_rebuild(lw):
+    # Set, then cleared: both have to reach the disk, or the rebuild resurrects
+    # a label the user deliberately removed.
     lw("label", "order-processor", "2", "short-lived")
+    _rebuild_from_disk_alone(lw)
+    assert _versions(lw.home, "order-processor")[1][2] == "short-lived"
     lw("label", "order-processor", "2", "")
-    lw("reindex", "--yes")
+    _rebuild_from_disk_alone(lw)
     assert _versions(lw.home, "order-processor")[1][2] is None
 
 
 @pytest.mark.usefixtures("staged")
 def test_an_alias_survives_a_rebuild(lw, tmp_path: Path):
     lw("rename", "order-processor", "orders-api", "--alias", "mystery-pkg")
-    lw("reindex", "--yes")
+    _rebuild_from_disk_alone(lw)
     # A later download named nothing like the function still lands on it. New
     # archive bytes (a later build stamp), so it is identified rather than
     # recognised as a download already seen.
@@ -134,10 +149,12 @@ def test_a_merge_survives_a_rebuild(lw, staged):
     lw("ingest", str(staged[1]), "--as", "order-processor-old", "--force")
     lw("merge", "order-processor-old", "order-processor")
     merged = _versions(lw.home, "order-processor")
+    assert [seq for seq, _, _ in merged] == [1, 2, 3]
     lw("reindex", "--yes")
+    assert _versions(lw.home, "order-processor") == merged
+    _rebuild_from_disk_alone(lw)
     assert _names(lw.home) == ["order-processor"]
     assert _versions(lw.home, "order-processor") == merged
-    assert [seq for seq, _, _ in merged] == [1, 2, 3]
 
 
 def test_a_merge_names_every_directory_after_its_new_number(lw, staged):
@@ -156,7 +173,7 @@ def test_merging_in_a_copy_of_a_version_already_there_keeps_both(lw, staged):
     lw("merge", "order-processor-old", "order-processor")
     versions = lw.home / "functions" / "order-processor" / "versions"
     assert len([p for p in versions.iterdir() if (p / "manifest.json").exists()]) == 3
-    lw("reindex", "--yes")
+    _rebuild_from_disk_alone(lw)
     assert len(_versions(lw.home, "order-processor")) == 3
 
 

@@ -172,6 +172,15 @@ extraction failure quarantines the file, an unchanged tree hash returns without 
 `manifest.json`, and [reindex.py](src/lambda_watcher/reindex.py) rebuilds the whole database from
 those manifests. Never store anything in SQLite that isn't recoverable from a manifest.
 
+That applies to *edits*, not just to ingest. A command that changes something the index records —
+`rename`, `label`, `--alias`, `merge`'s renumbering — writes the disk first (`Store.patch_manifest`,
+`Store.write_aliases` → `functions/<slug>/aliases.json`) and the index second. All four once wrote
+SQLite alone, and `lw reindex`, the recovery command, silently reverted renames, dropped labels and
+aliases, and collided merged versions. [tests/test_reindex.py](tests/test_reindex.py) rebuilds with
+the index *deleted*, so an edit that never reached a manifest fails there rather than passing on the
+strength of the recovery path. A function's identity on disk is its **directory**, since that is
+what `rename` moves; `reindex` never files a version under a slug taken from inside a manifest.
+
 **Two hashes, two meanings.** `zip_sha256` is the downloaded file (catches literal re-downloads);
 `tree_hash` is sha256 over sorted `(path, file sha256)` pairs of the extracted tree, and it is what
 decides whether a version is new. Re-downloading the same Lambda produces a different zip but the

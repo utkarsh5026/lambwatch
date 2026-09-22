@@ -562,7 +562,7 @@ class PidfileManager(Manager):
             return state
         state.installed = True
         state.pid = pid
-        state.running = _pid_alive(pid)
+        state.running = pid_alive(pid)
         if not state.running:
             state.detail = "the recorded process is gone"
         else:
@@ -578,8 +578,11 @@ class PidfileManager(Manager):
         return int(text) if text.isdigit() else None
 
 
-def _pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     """Is that process still running?
+
+    The one safe way to ask, on every platform — :meth:`heartbeat.Heartbeat.is_running`
+    uses it too. Never call ``os.kill(pid, 0)`` directly: on Windows that is not a probe.
 
     A process this one started and then signalled stays visible to ``kill(0)``
     as a zombie until somebody collects its exit status, and normally nobody
@@ -588,8 +591,9 @@ def _pid_alive(pid: int) -> bool:
     session) from reporting a stopped watcher as running.
     """
     if sys.platform.startswith("win"):
-        # `os.kill(pid, 0)` on Windows is TerminateProcess with an exit code of
-        # zero, not a probe, so asking whether a process is alive would end it.
+        # Signal 0 is CTRL_C_EVENT on Windows, so `os.kill(pid, 0)` sends Ctrl+C
+        # to a whole console process group, and any other signal is
+        # TerminateProcess. Either way asking would disturb the process.
         # tasklist only looks.
         proc = _run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"])
         return f'"{pid}"' in proc.stdout

@@ -114,6 +114,9 @@ jobs:
           /tmp/smoke/bin/python -m pip install --quiet dist/*.whl
           cd /tmp
           export LAMBDA_WATCHER_HOME=/tmp/smoke-home
+          # Runners have no ~/Downloads, and `lw doctor` exits 1 on a missing
+          # watch folder. A real machine has one; that is the case worth checking.
+          mkdir -p "$HOME/Downloads"
           test "$(/tmp/smoke/bin/lambda-watcher --version)" = "lambda-watcher ${{ needs.check-version.outputs.version }}"
           /tmp/smoke/bin/lw doctor
 

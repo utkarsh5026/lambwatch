@@ -958,7 +958,10 @@ def doctor() -> None:
     """Check that everything the tool needs is in place, and exit nonzero if it is not.
 
     Every row that is not ``ok`` carries a remedy, because a checkup that only
-    names a problem has done half the job. The exit code is what makes this usable
+    names a problem has done half the job. Paths are shown as ``~/...``, as ``lw``
+    shows them: an absolute path sets the width of the detail column, and with the
+    remedy column after it, a long home directory — macOS keeps temp homes under
+    ``/private/var/folders/...`` — pushed every remedy sideways. The exit code is what makes this usable
     from a cron or a CI step: it used to print ``MISSING`` in red and still exit 0,
     so nothing automated could ever notice.
     """
@@ -967,7 +970,7 @@ def doctor() -> None:
 
     config_path = _CONFIG_PATH or default_config_path()
     rows.append((
-        "config file", "ok" if config_path.exists() else "using defaults", str(config_path),
+        "config file", "ok" if config_path.exists() else "using defaults", _home_relative(config_path),
         "" if config_path.exists() else "lw init writes one you can edit",
     ))
 
@@ -978,7 +981,7 @@ def doctor() -> None:
         ))
 
     rows.append((
-        "archive root", "ok" if cfg.root.exists() else "missing", str(cfg.root),
+        "archive root", "ok" if cfg.root.exists() else "missing", _home_relative(cfg.root),
         "" if cfg.root.exists() else "lw setup creates it",
     ))
 
@@ -987,14 +990,14 @@ def doctor() -> None:
             better = [d for d in _best_watch_dirs() if Path(d).expanduser().is_dir()]
             hint = f"downloads look like they land in {better[0]}" if better else \
                 "set watch.dirs in the config, then lw restart"
-            rows.append(("watch dir", "MISSING", str(directory), hint))
+            rows.append(("watch dir", "MISSING", _home_relative(directory), hint))
         elif not os.access(directory, os.R_OK):
             rows.append((
-                "watch dir", "UNREADABLE", str(directory),
+                "watch dir", "UNREADABLE", _home_relative(directory),
                 "grant read access, or point watch.dirs somewhere else",
             ))
         else:
-            rows.append(("watch dir", "ok", str(directory), ""))
+            rows.append(("watch dir", "ok", _home_relative(directory), ""))
 
     state = current_status(cfg, _CONFIG_PATH)
     if state.running or state.installed:
@@ -1054,7 +1057,7 @@ def doctor() -> None:
     if quarantined:
         rows.append((
             "quarantine", "held", f"{len(quarantined)} archive(s) refused",
-            f"read why in {cfg.quarantine_dir}",
+            f"read why in {_home_relative(cfg.quarantine_dir)}",
         ))
 
     try:

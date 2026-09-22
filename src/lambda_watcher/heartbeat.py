@@ -15,10 +15,10 @@ because that is exactly when someone is asking whether the watcher is alive.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .service import pid_alive
 from .utils import LOG, parse_iso, utc_now_iso
 
 #: How often a running watcher refreshes the file. Also the unit staleness is
@@ -72,19 +72,13 @@ class Heartbeat:
         """Whether the process that wrote this is still on this machine.
 
         A clean shutdown records ``stopped_at`` and needs no probing. Otherwise the
-        pid is checked with signal 0, which asks the kernel about the process
-        without disturbing it. A pid we are not allowed to signal still exists, so
-        ``PermissionError`` is a yes.
+        pid goes to :func:`service.pid_alive` rather than ``os.kill(pid, 0)``,
+        which on Windows sends Ctrl+C instead of asking: ``lw doctor`` would
+        interrupt itself, or whichever console the recorded pid belonged to.
         """
         if self.stopped_at:
             return False
-        try:
-            os.kill(self.pid, 0)
-        except PermissionError:
-            return True
-        except (OSError, ValueError):
-            return False
-        return True
+        return pid_alive(self.pid)
 
 
 def write(path: Path, beat: Heartbeat) -> None:
