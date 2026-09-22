@@ -1,6 +1,7 @@
 
 from lambda_watcher.diffing import compare_versions
-from lambda_watcher.diffing.render_html import render_html, render_timeline
+from lambda_watcher.diffing.build import archive_index_entries
+from lambda_watcher.diffing.render_html import render_archive_index, render_html, render_timeline
 from lambda_watcher.ingest import Ingestor
 from lambda_watcher.store import Store
 from tests.conftest import PY_V1, PY_V2, fake_secret
@@ -215,6 +216,57 @@ def test_timeline_renders():
         ],
     )
     assert "v0002" in page and "v0001-v0002.html" in page and "first version" in page
+
+
+def test_archive_index_counts_what_the_latest_version_ships(cfg, db, ingestor: Ingestor, make_zip):
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    leaked = PY_V2 + f'\nSTRIPE = "{fake_secret("stripe")}"\n'
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": leaked}))
+    [entry] = archive_index_entries(db, cfg.reports_dir)
+    assert (entry["seq"], entry["previous_seq"], entry["versions"]) == (2, 1, 2)
+    assert sum(entry["secrets"].values()) >= 1
+    assert entry["change_href"] == "fn/v0001-v0002.html"
+    page = render_archive_index([entry])
+    assert 'href="fn/v0001-v0002.html"' in page
+    assert fake_secret("stripe") not in page, "counts only; the value never reaches the page"
+
+
+def test_archive_index_never_links_a_latest_html_that_was_left_behind(
+    cfg, db, ingestor: Ingestor, make_zip
+):
+    """``latest.html`` is the last comparison *rendered*, which need not be the latest pair.
+
+    With automatic reports off, versions keep arriving and an old ``latest.html``
+    goes on showing v1 → v2. Linking it as "the latest change" would be a
+    quietly wrong answer, so the row names the command that writes the real one.
+    """
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V2}))
+    cfg.report.auto_diff = False
+    ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V2 + "\n# three\n"}))
+    assert (cfg.reports_dir / "fn" / "latest.html").exists()
+
+    [entry] = archive_index_entries(db, cfg.reports_dir)
+    assert (entry["previous_seq"], entry["seq"]) == (2, 3)
+    assert entry["change_href"] is None
+    assert 'lw report "fn"' in render_archive_index([entry])
+
+
+def test_archive_index_escapes_names_and_orders_severities():
+    page = render_archive_index([{
+        "name": "<script>fn</script>", "versions": 3, "seq": 3, "previous_seq": 2,
+        "label": "prod", "ingested_at": "2026-01-02T00:00:00+00:00", "runtime": "python3.12",
+        "secrets": {"high": 2, "low": 1}, "change_href": "fn/v0002-v0003.html",
+        "history_href": "fn/index.html",
+    }])
+    assert "<script>fn</script>" not in page and "&lt;script&gt;fn&lt;/script&gt;" in page
+    assert page.index("2 high") < page.index("1 low")
+    assert 'href="fn/index.html"' in page and "prod" in page
+
+
+def test_an_empty_archive_index_says_what_to_type():
+    page = render_archive_index([])
+    assert "Nothing is archived yet" in page and "lw setup" in page
 
 
 def test_a_renamed_wrapper_does_not_read_as_a_rewrite(cfg, db, ingestor: Ingestor, make_zip):

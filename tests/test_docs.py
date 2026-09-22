@@ -40,8 +40,13 @@ BUILDER = REPO / "docs" / "examples" / "build_demo.py"
 # space `doctor` reports. Every other character of a documented capture has to
 # match what the tool printed.
 _VARIABLE = [
-    (re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}"), "<archived>"),
+    # Seconds are optional: `lw logs` prints the log file's own stamps, to the second.
+    (re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?"), "<archived>"),
     (re.compile(r"^[0-9a-f]{7,40}(?= order-processor v\d)"), "<commit>"),
+    # How long ago something happened depends on how quickly the capture ran
+    # after it. The builder takes `status` straight after the ingest it describes,
+    # but a slow machine can still tip "just now" over into "1 minute ago".
+    (re.compile(r"\bjust now\b|\b\d+ minutes? ago\b"), "<recently>"),
     # `doctor` reports the machine's free space, which is not a property of the
     # tool at all: the page quotes whatever the run that produced it saw.
     (re.compile(r"^(disk free)\s+\S+\s+.*$"), r"\1 <this machine>"),
@@ -175,3 +180,38 @@ def test_every_command_reference_entry_shows_its_output() -> None:
         assert name, "a command reference entry carries no name"
         missing.append(name.group(1))
     assert not missing, f"listed with no example output: {missing}"
+
+
+def _registered_commands() -> set[str]:
+    """Every command name the CLI actually registers."""
+    from lambda_watcher.cli import app
+
+    return {c.name or (c.callback.__name__ if c.callback else "?") for c in app.registered_commands}
+
+
+def test_every_command_is_named_in_the_site_reference() -> None:
+    """The reference covers every command, not just some of them.
+
+    The check above only runs one way — nothing documented is missing from the
+    CLI — which is how the whole service lifecycle (``setup``, ``status``,
+    ``start``, ``stop``, ``restart``) went missing from the site while every test
+    passed. A command counts as documented when an entry's name or description
+    says ``lw <command>``; appearing incidentally inside some other command's
+    captured output does not count.
+    """
+    markup = SITE.read_text(encoding="utf-8")
+    reference = re.search(r'<div class="cmdlist">.*?\n    </div>', markup, re.S)
+    assert reference, "the command reference has moved"
+    spans = re.findall(r'<span class="cmd__(?:name|what)">(.*?)</span>', reference.group(0), re.S)
+    described = " ".join(spans)
+    named = set(re.findall(r"\blw ([a-z]+)", html.unescape(re.sub(r"<[^>]+>", "", described))))
+    missing = sorted(_registered_commands() - named)
+    assert not missing, f"commands the site reference never names: {missing}"
+
+
+def test_every_command_has_a_row_in_the_readme() -> None:
+    """The README's command table lists every command the CLI has."""
+    table = [ln for ln in README.read_text(encoding="utf-8").splitlines() if ln.startswith("| `")]
+    listed = {name for row in table for name in re.findall(r"`([a-z]+)[ `]", row.split("|")[1])}
+    missing = sorted(_registered_commands() - listed)
+    assert not missing, f"commands missing from the README's command table: {missing}"

@@ -200,3 +200,141 @@ def test_git_mirror_records_one_commit_per_version(cfg, db, downloads: Path):
         capture_output=True, text=True,
     ).stdout
     assert "lambda_function.py" in diff
+
+
+def test_a_windows_folder_is_polled_even_when_the_config_never_asked(cfg, db, tmp_path: Path, monkeypatch):
+    # The failure this prevents is silent: the native observer attaches to a
+    # /mnt folder, reports success, and never fires once - so a config written
+    # before this existed would keep a watcher that is running and useless.
+    from lambda_watcher import config as config_module
+    from watchdog.observers.polling import PollingObserver
+
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    mount = tmp_path / "mnt"
+    monkeypatch.setattr(config_module, "_WSL_MOUNT_ROOT", mount)
+    windows_downloads = mount / "c" / "Users" / "Sam" / "Downloads"
+    windows_downloads.mkdir(parents=True)
+
+    cfg.watch.force_polling = False
+    watcher = Watcher(cfg, db, Ingestor(cfg, db))
+    observer_cls, polling, reason = watcher._choose_observer([windows_downloads])
+
+    assert observer_cls is PollingObserver and polling
+    assert str(windows_downloads) in reason
+
+
+def test_an_ordinary_folder_is_left_on_native_events(cfg, db, downloads: Path, monkeypatch):
+    from watchdog.observers import Observer
+
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    from lambda_watcher import config as config_module
+    monkeypatch.setattr(config_module, "_WSL_OSRELEASE", downloads / "nope")
+
+    cfg.watch.force_polling = False
+    watcher = Watcher(cfg, db, Ingestor(cfg, db))
+    observer_cls, polling, _ = watcher._choose_observer([downloads])
+
+    assert observer_cls is Observer and not polling
+
+
+def test_a_running_watcher_says_where_it_is_looking(cfg, db, downloads: Path):
+    # The service manager can only say a process exists. The heartbeat is what
+    # says it attached to the folder, which is what someone actually needs to know.
+    from lambda_watcher import heartbeat
+
+    cfg.watch.force_polling = True
+    cfg.watch.polling_interval = 0.2
+    cfg.watch.scan_on_start = False
+    watcher = Watcher(cfg, db, Ingestor(cfg, db))
+    watcher.start()
+    try:
+        beat = heartbeat.read(cfg.heartbeat_path)
+        assert beat is not None and beat.is_running()
+        assert beat.dirs == [str(downloads)]
+        assert beat.observer == "polling"
+    finally:
+        watcher.stop()
+
+    stopped = heartbeat.read(cfg.heartbeat_path)
+    assert stopped is not None and stopped.stopped_at
+    assert not stopped.is_running()
+
+
+def test_starting_and_stopping_are_recorded_so_idle_is_not_mistaken_for_dead(cfg, db, downloads: Path):
+    cfg.watch.force_polling = True
+    cfg.watch.polling_interval = 0.2
+    cfg.watch.scan_on_start = False
+    watcher = Watcher(cfg, db, Ingestor(cfg, db))
+    watcher.start()
+    watcher.stop()
+    kinds = [row["kind"] for row in db.recent_events(10)]
+    assert "watcher-started" in kinds and "watcher-stopped" in kinds
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGTERM is how POSIX service managers stop a process")
+def test_a_termination_request_is_a_clean_stop_not_a_crash(tmp_path: Path):
+    # systemd, launchd and `lw stop` all end the watcher with SIGTERM. Before it
+    # was handled the process just died, so a deliberate stop looked like a crash.
+    import signal
+    import sys
+
+    from lambda_watcher import heartbeat
+
+    home = tmp_path / "store"
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f'watch:\n  dirs: ["{downloads.as_posix()}"]\n  scan_on_start: false\n'
+        "git_mirror:\n  enabled: false\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "LAMBDA_WATCHER_HOME": str(home), "LAMBDA_WATCHER_CONFIG": str(config)}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "lambda_watcher", "watch"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    try:
+        assert _wait_for(lambda: (home / "state" / "watcher.json").exists(), timeout=20)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=20) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+    beat = heartbeat.read(home / "state" / "watcher.json")
+    assert beat is not None and beat.stopped_at
+
+
+def test_a_java_package_passed_over_says_why_where_it_will_be_read(tmp_path: Path, caplog):
+    # A .jar Lambda is a zip with another name. Skipping it silently left no
+    # answer anywhere to "did it even notice my download?".
+    import logging
+
+    from lambda_watcher.utils import LOG
+
+    queued = []
+    handler = _Handler(lambda p, r: queued.append(p), lambda p: p.suffix == ".zip")
+    LOG.propagate = True
+    try:
+        with caplog.at_level(logging.INFO, logger="lambda_watcher"):
+            handler.on_created(FileCreatedEvent(str(tmp_path / "order-processor.jar")))
+    finally:
+        LOG.propagate = False
+    assert not queued
+    assert "order-processor.jar" in caplog.text and "watch.extensions" in caplog.text
+
+
+def test_an_ordinary_download_is_skipped_without_filling_the_log(tmp_path: Path, caplog):
+    import logging
+
+    from lambda_watcher.utils import LOG
+
+    handler = _Handler(lambda p, r: None, lambda p: p.suffix == ".zip")
+    LOG.propagate = True
+    try:
+        with caplog.at_level(logging.INFO, logger="lambda_watcher"):
+            handler.on_created(FileCreatedEvent(str(tmp_path / "holiday.jpg")))
+    finally:
+        LOG.propagate = False
+    assert "holiday.jpg" not in caplog.text

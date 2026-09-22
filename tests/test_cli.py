@@ -98,6 +98,27 @@ def test_status_names_the_archive_and_what_to_do_with_it(archived: Path):
     assert 'lw diff "order-processor"' in output
 
 
+def test_status_points_at_the_page_linking_every_report(archived: Path):
+    output = _run("status").output
+    assert "index.html · lw report" in output
+
+
+def test_status_still_names_a_report_in_an_archive_from_before_the_front_page(archived: Path):
+    """back-compat: an older release wrote each function's latest.html and nothing above it."""
+    (archived / "reports" / "index.html").unlink()
+    output = _run("status").output
+    assert "latest report:" in output and "latest.html" in output
+
+
+def test_a_running_watcher_suggests_the_page_for_every_function():
+    """Not the newest function's history: the dashboard should not guess which one you meant."""
+    from lambda_watcher.service import ServiceStatus
+
+    running = ServiceStatus("systemd", installed=True, running=True)
+    commands = [command for command, _ in cli._next_steps(running, "order-processor")]
+    assert commands == ['lw diff "order-processor"', "lw report"]
+
+
 def test_setup_survives_a_machine_that_will_not_take_a_service(
     home: Path, downloads: Path, tmp_path: Path, monkeypatch
 ):
@@ -192,6 +213,29 @@ def test_the_first_version_of_a_function_has_nothing_to_compare_against(
     assert not (home / "reports" / "solo").exists()
 
 
+def test_the_archive_gets_a_front_page_linking_every_function(archived: Path):
+    """Reading a report should not start with knowing which folder it is in."""
+    page = (archived / "reports" / "index.html").read_text(encoding="utf-8")
+    assert "order-processor" in page
+    assert 'href="order-processor/v0001-v0002.html"' in page
+    assert "order-processor/index.html" not in page, "nothing has written a history page yet"
+
+
+def test_a_functions_first_version_is_on_the_front_page_already(home: Path, downloads: Path):
+    _run("ingest", str(_zip(downloads, "solo.zip", {"lambda_function.py": PY_V1})))
+    page = (home / "reports" / "index.html").read_text(encoding="utf-8")
+    assert "solo" in page and "first version" in page
+
+
+def test_housekeeping_keeps_the_front_page_current(archived: Path):
+    front_page = archived / "reports" / "index.html"
+    _run("rename", "order-processor", "orders-api")
+    page = front_page.read_text(encoding="utf-8")
+    assert "orders-api" in page and "order-processor" not in page
+    _run("rm", "orders-api", "--yes")
+    assert "Nothing is archived yet" in front_page.read_text(encoding="utf-8")
+
+
 def test_ingest_ls_and_versions(archived: Path):
     assert "order-processor" in _run("ls").output
     output = _run("versions", "order-processor").output
@@ -233,6 +277,125 @@ def test_report_builds_a_browsable_history(archived: Path):
     index = archived / "reports" / "order-processor" / "index.html"
     assert index.exists()
     assert (archived / "reports" / "order-processor" / "v0001-v0002.html").exists()
+
+
+@pytest.fixture
+def browser(monkeypatch) -> list[Path]:
+    """Every page a command tried to show, recorded instead of opening a window."""
+    opened: list[Path] = []
+
+    def fake_open(page: Path) -> bool:
+        """Record the page and claim a browser took it."""
+        opened.append(page)
+        return True
+
+    monkeypatch.setattr(cli, "_open_in_browser", fake_open)
+    return opened
+
+
+def test_report_opens_itself_for_someone_at_a_desktop(archived: Path, browser, monkeypatch):
+    monkeypatch.setattr(cli, "_desktop_in_front", lambda: True)
+    _run("report", "order-processor")
+    assert browser == [archived / "reports" / "order-processor" / "index.html"]
+
+
+def test_report_stays_shut_for_scripts_and_for_no_open(archived: Path, browser, monkeypatch):
+    # CliRunner's stdout is not a terminal, which is exactly what a pipe, a cron
+    # job or the docs builder looks like — none of them has a screen to open on.
+    _run("report", "order-processor")
+    monkeypatch.setattr(cli, "_desktop_in_front", lambda: True)
+    _run("report", "order-processor", "--no-open")
+    assert browser == []
+
+
+def test_report_open_insists_and_names_the_way_out_when_no_browser_answers(
+    archived: Path, monkeypatch
+):
+    monkeypatch.setattr(cli, "_open_in_browser", lambda page: False)
+    result = _run("report", "order-processor", "--open")
+    assert "open the file above yourself" in result.output
+
+
+def test_bare_report_writes_the_page_linking_every_function_and_opens_it(
+    archived: Path, browser, monkeypatch
+):
+    front_page = archived / "reports" / "index.html"
+    front_page.unlink()
+    monkeypatch.setattr(cli, "_desktop_in_front", lambda: True)
+    result = _run("report")
+    assert "(1 function)" in result.output
+    assert browser == [front_page]
+
+
+def test_a_functions_history_is_linked_from_the_front_page_once_written(archived: Path):
+    _run("report", "order-processor")
+    page = (archived / "reports" / "index.html").read_text(encoding="utf-8")
+    assert 'href="order-processor/index.html"' in page
+
+
+def test_bare_report_elsewhere_still_links_back_into_the_archive(archived: Path, tmp_path: Path):
+    """Relative links, worked out from where the page landed — not from ``reports/``."""
+    import re
+    from urllib.parse import unquote
+
+    elsewhere = tmp_path / "shared reports"
+    _run("report", "--output", str(elsewhere))
+    page = (elsewhere / "index.html").read_text(encoding="utf-8")
+    [href] = re.findall(r'href="([^"]*v0001-v0002\.html)"', page)
+    assert (elsewhere / unquote(href)).resolve().exists()
+
+
+def test_bare_report_on_an_empty_archive_says_what_to_do(home: Path, browser, monkeypatch):
+    """An empty archive is where everybody starts, not an error."""
+    monkeypatch.setattr(cli, "_desktop_in_front", lambda: True)
+    result = _run("report")
+    assert "lw setup" in result.output
+    assert browser == []
+    assert not (home / "reports" / "index.html").exists()
+
+
+@pytest.mark.parametrize(("env", "wsl", "expected"), [
+    ({"DISPLAY": ":0"}, False, True),
+    # Headless: webbrowser's fallback would start lynx inside this terminal.
+    ({}, False, False),
+    # WSL needs no DISPLAY: the page goes to the browser on the Windows side.
+    ({}, True, True),
+    # Over SSH any desktop belongs to a different machine.
+    ({"DISPLAY": ":0", "SSH_CONNECTION": "10.0.0.2 50000 10.0.0.1 22"}, False, False),
+])
+def test_desktop_in_front_on_linux(monkeypatch, env: dict[str, str], wsl: bool, expected: bool):
+    for name in ("DISPLAY", "WAYLAND_DISPLAY", "BROWSER", "SSH_CONNECTION", "SSH_TTY"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "on_wsl", lambda: wsl)
+    assert cli._desktop_in_front() is expected
+
+
+def test_open_in_browser_hands_a_wsl_page_to_windows_by_its_windows_name(
+    tmp_path: Path, monkeypatch
+):
+    page = tmp_path / "index.html"
+    page.write_text("<!DOCTYPE html>", encoding="utf-8")
+    windows_name = r"\\wsl.localhost\Ubuntu\home\me\index.html"
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs):
+        """Answer ``wslpath -w`` with a Windows name; fail explorer.exe the way it really does."""
+        calls.append(argv)
+        if argv[0] == "wslpath":
+            return subprocess.CompletedProcess(argv, 0, stdout=windows_name + "\n")
+        return subprocess.CompletedProcess(argv, 1)
+
+    monkeypatch.setattr(cli, "on_wsl", lambda: True)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    # A file:///home/... URI is the bug this avoids: a Windows browser reads it as C:\home.
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: pytest.fail(f"webbrowser got {url}"))
+    assert cli._open_in_browser(page) is True
+    assert calls[-1] == ["explorer.exe", windows_name]
 
 
 # A real executable, so `open` resolves it the way it resolves `code`; the
@@ -478,8 +641,37 @@ def test_reindex_rebuilds_from_disk(archived: Path):
     assert "v0002" in _run("versions", "order-processor").output
 
 
-def test_doctor_runs(home: Path):
-    assert "archive root" in _run("doctor").output
+def test_doctor_runs(home: Path, downloads: Path, tmp_path: Path):
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    assert "archive root" in _run("--config", str(config), "doctor").output
+
+
+def test_doctor_fails_when_a_watch_folder_does_not_exist(home: Path, tmp_path: Path):
+    # It used to print MISSING in red and exit 0, so no script or cron job could
+    # ever notice the one failure that stops the archive growing.
+    config = _config_watching(tmp_path / "config.yaml", tmp_path / "not-there")
+    result = runner.invoke(app, ["--config", str(config), "doctor"])
+    assert result.exit_code == 1
+    assert "MISSING" in result.output
+    assert "problem" in result.output
+
+
+def test_doctor_names_a_config_key_nothing_reads(home: Path, downloads: Path, tmp_path: Path):
+    # `dir` for `dirs` loads without complaint and watches the wrong folder, so
+    # the typo has to be said out loud somewhere.
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f'watch:\n  dirs: ["{downloads.as_posix()}"]\n  dir: ["/elsewhere"]\n', encoding="utf-8"
+    )
+    result = runner.invoke(app, ["--config", str(config), "doctor"])
+    assert result.exit_code == 1
+    assert "watch.dir" in result.output
+
+
+def test_doctor_gives_every_problem_a_remedy(home: Path, tmp_path: Path):
+    config = _config_watching(tmp_path / "config.yaml", tmp_path / "not-there")
+    result = runner.invoke(app, ["--config", str(config), "doctor"])
+    assert "what to do" in result.output
 
 
 def test_a_broken_config_is_explained_rather_than_traced(home: Path, tmp_path: Path):
@@ -594,3 +786,188 @@ def test_a_deleted_version_directory_says_what_to_type(archived: Path):
     result = _run("diff", "order-processor")
     assert "missing from the archive" in result.output
     assert "lw reindex" in result.output
+
+
+def test_status_says_when_a_watch_folder_does_not_exist(home: Path, tmp_path: Path):
+    # The failure this tool has to be loudest about: everything downstream looks
+    # healthy while nothing can ever arrive.
+    config = _config_watching(tmp_path / "config.yaml", tmp_path / "not-there")
+    result = _run("--config", str(config))
+    assert "does not exist" in result.output
+    assert "lw doctor" in result.output
+
+
+def test_status_still_exits_cleanly_over_a_missing_folder(home: Path, tmp_path: Path):
+    # Bare `lw` is a dashboard, and a dashboard reporting a problem is not a failure.
+    config = _config_watching(tmp_path / "config.yaml", tmp_path / "not-there")
+    assert runner.invoke(app, ["--config", str(config)]).exit_code == 0
+
+
+def test_logs_shows_the_end_of_the_watcher_log(home: Path, downloads: Path, tmp_path: Path):
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    log = home / "logs" / "watcher.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(f"line {n}\n" for n in range(100)), encoding="utf-8")
+    result = _run("--config", str(config), "logs", "-n", "3")
+    assert "line 99" in result.output and "line 97" in result.output
+    assert "line 96" not in result.output
+
+
+def test_logs_on_an_empty_log_says_where_to_look_next(home: Path, downloads: Path, tmp_path: Path):
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    log = home / "logs" / "watcher.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("", encoding="utf-8")
+    result = _run("--config", str(config), "logs")
+    assert "empty" in result.output and "lw doctor" in result.output
+
+
+def test_logs_without_a_service_log_names_the_command_that_makes_one(home: Path, tmp_path: Path):
+    result = runner.invoke(app, ["logs", "--service"])
+    assert result.exit_code == 1
+    assert "lw start" in result.output
+
+
+def test_an_empty_activity_log_points_at_the_log_file(home: Path):
+    result = _run("log")
+    assert "lw logs" in result.output
+
+
+def test_a_watcher_started_by_hand_is_seen_from_another_terminal(
+    home: Path, downloads: Path, tmp_path: Path
+):
+    # `lw watch` is invisible to the service manager, so this used to read as
+    # "not watching" while the watcher was busy archiving in the next window.
+    import os
+
+    from lambda_watcher import heartbeat
+    from lambda_watcher.utils import utc_now_iso
+
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    now = utc_now_iso()
+    heartbeat.write(home / "state" / "watcher.json", heartbeat.Heartbeat(
+        pid=os.getpid(), started_at=now, last_beat_at=now,
+        dirs=[str(downloads)], observer="native events", observer_reason="test",
+    ))
+    result = _run("--config", str(config))
+    assert "in a terminal" in result.output
+    assert "not watching" not in result.output
+
+
+def test_a_stale_heartbeat_is_not_mistaken_for_a_watcher(home: Path, downloads: Path, tmp_path: Path):
+    import os
+
+    from lambda_watcher import heartbeat
+
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    long_ago = "2026-01-01T00:00:00+00:00"
+    heartbeat.write(home / "state" / "watcher.json", heartbeat.Heartbeat(
+        pid=os.getpid(), started_at=long_ago, last_beat_at=long_ago,
+        dirs=[str(downloads)], observer="native events",
+    ))
+    result = _run("--config", str(config))
+    assert "in a terminal" not in result.output
+
+
+def test_demo_shows_every_outcome_without_touching_the_real_archive(home: Path):
+    result = _run("demo", "--no-open")
+    assert "new" in result.output and "unchanged" in result.output
+    assert "Dependencies" in result.output and "New findings" in result.output
+    assert (home / "demo" / "reports" / "order-processor" / "latest.html").exists()
+    # The whole point: a sample function must never show up as one of yours.
+    assert "Nothing archived yet" in _run("ls").output
+
+
+def test_demo_starts_from_nothing_each_time(home: Path):
+    _run("demo", "--no-open")
+    second = _run("demo", "--no-open")
+    assert "order-processor v0001" in second.output
+    assert "v0003" not in second.output
+
+
+def test_demo_clean_removes_it_and_is_calm_when_there_is_nothing(home: Path):
+    _run("demo", "--no-open")
+    assert "removed" in _run("demo", "--clean").output
+    assert not (home / "demo").exists()
+    assert "nothing to remove" in _run("demo", "--clean").output
+
+
+def test_the_dashboard_on_an_empty_archive_offers_the_demo(home: Path):
+    assert "lw demo" in _run().output
+
+
+def test_setup_on_an_empty_archive_ends_with_something_to_look_at(
+    home: Path, downloads: Path, tmp_path: Path
+):
+    config = _config_watching(tmp_path / "config.yaml", downloads)
+    result = _run("--config", str(config), "setup", "--no-service")
+    assert "lw demo" in result.output
+    assert "--install-completion" in result.output
+
+
+def test_setup_repoints_an_old_config_at_where_downloads_really_land(
+    home: Path, downloads: Path, tmp_path: Path, monkeypatch
+):
+    # A config an older release wrote on WSL names a ~/Downloads that has never
+    # existed there. Its owner should be offered the fix, not told to edit YAML.
+    from lambda_watcher.templates import render_config
+
+    config = tmp_path / "config.yaml"
+    config.write_text(render_config([str(tmp_path / "never-existed")]), encoding="utf-8")
+    monkeypatch.setattr(cli, "_best_watch_dirs", lambda: [str(downloads)])
+
+    result = _run("--config", str(config), "setup", "--yes", "--no-service")
+    assert "now watching" in result.output
+    assert "do not exist" not in result.output
+    from lambda_watcher.config import load_config
+    assert load_config(config).watch.dirs == [str(downloads)]
+
+
+def test_setup_will_not_edit_a_config_without_someone_to_ask(
+    home: Path, downloads: Path, tmp_path: Path, monkeypatch
+):
+    config = _config_watching(tmp_path / "config.yaml", tmp_path / "never-existed")
+    before = config.read_text(encoding="utf-8")
+    monkeypatch.setattr(cli, "_best_watch_dirs", lambda: [str(downloads)])
+    result = _run("--config", str(config), "setup", "--no-service")
+    assert config.read_text(encoding="utf-8") == before
+    assert str(downloads) in result.output          # still named, so it can be typed
+
+
+def test_rewriting_the_watch_folders_keeps_every_comment(tmp_path: Path):
+    from lambda_watcher.templates import render_config
+
+    config = tmp_path / "config.yaml"
+    config.write_text(render_config(["/old"]), encoding="utf-8")
+    comments = [ln for ln in config.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("#")]
+    assert cli._rewrite_watch_dirs(config, ["/new"])
+    after = config.read_text(encoding="utf-8")
+    assert [ln for ln in after.splitlines() if ln.strip().startswith("#")] == comments
+    assert '"/new"' in after and '"/old"' not in after
+
+
+def test_rewriting_keeps_a_one_line_list_on_one_line(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    config.write_text('watch:\n  dirs: ["~/Downloads"]\n  stable_seconds: 3\n', encoding="utf-8")
+    assert cli._rewrite_watch_dirs(config, ["/a", "/b"])
+    assert config.read_text(encoding="utf-8") == 'watch:\n  dirs: ["/a", "/b"]\n  stable_seconds: 3\n'
+
+
+def test_rewriting_does_not_mangle_a_windows_path(tmp_path: Path):
+    # re.sub reads backslashes in a replacement string as escapes, which would
+    # turn C:\Users\Sam into something else entirely.
+    from lambda_watcher.config import load_config
+
+    config = tmp_path / "config.yaml"
+    config.write_text('watch:\n  dirs: ["~/Downloads"]\n', encoding="utf-8")
+    windows = "C:\\Users\\Sam\\Downloads"
+    assert cli._rewrite_watch_dirs(config, [windows])
+    assert load_config(config).watch.dirs == [windows]
+
+
+def test_rewriting_declines_a_layout_it_does_not_recognise(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    odd = "watch:\n    dirs:\n        - ~/Downloads\n"          # four-space indent
+    config.write_text(odd, encoding="utf-8")
+    assert not cli._rewrite_watch_dirs(config, ["/new"])
+    assert config.read_text(encoding="utf-8") == odd

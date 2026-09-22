@@ -229,3 +229,18 @@ def test_a_version_dir_written_on_windows_still_resolves(cfg, db, ingestor: Inge
     resolved = Store(cfg).resolve_version_dir(reread["dir"])
     assert resolved == result.version_dir
     assert (resolved / "code" / "lambda_function.py").is_file()
+
+
+def test_a_report_index_that_cannot_be_written_never_fails_the_ingest(
+    ingestor: Ingestor, make_zip, monkeypatch
+):
+    """The version is on disk and indexed before the page is touched; that stands."""
+    from lambda_watcher import diffing
+
+    def refuse(*_args, **_kwargs):
+        """Fail the way a full disk or a read-only reports folder would."""
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(diffing, "write_archive_index", refuse)
+    result = ingestor.ingest(make_zip("fn.zip", {"lambda_function.py": PY_V1}))
+    assert result.status == "new"
