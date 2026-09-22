@@ -12,6 +12,7 @@
         <slug>/              # optional git mirror, one commit per version
       functions/
         <slug>/
+          aliases.json       # filename fragments `lw rename --alias` taught it
           versions/
             0001-a1b2c3d4/
               code/          # the extracted tree
@@ -39,6 +40,26 @@ from .utils import LOG, rmtree, short_hash
 #: before the move to ``repos/<slug>/`` can still be opened, which for a tool
 #: people leave running unattended is not a date anyone can name.
 LEGACY_REPO_DIRNAMES = ("git", "repo")
+
+#: The file beside ``versions/`` that remembers a function's aliases.
+ALIASES_FILENAME = "aliases.json"
+
+#: Stands in for "leave this field alone" where ``None`` is itself a real value —
+#: clearing a label is passing ``None``, not passing nothing.
+_UNCHANGED: Any = object()
+
+
+def _write_json_atomically(path: Path, data: Any) -> None:
+    """Replace a JSON file in one step, so a reader never meets half of one.
+
+    Written beside the target and renamed over it. That matters more here than
+    for most files: a manifest is the only durable record of a version, and one
+    truncated by a crash mid-write is a version ``lw reindex`` can no longer see.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=False, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
 
 
 def posix_stored_dir(stored_dir: str) -> str:
@@ -242,6 +263,74 @@ class Store:
         except (json.JSONDecodeError, OSError) as exc:
             LOG.warning("could not read %s: %s", manifest, exc)
             return None
+
+    def patch_manifest(
+        self,
+        version_dir: Path,
+        *,
+        function: dict[str, str] | None = None,
+        seq: int | None = None,
+        label: str | None = _UNCHANGED,
+    ) -> bool:
+        """Rewrite the parts of a version's manifest an edit changes, and nothing else.
+
+        ``rename``, ``label`` and ``merge`` used to change only ``index.db``, which
+        broke the one rule this layout exists for — the index can always be rebuilt
+        from what is on disk. ``lw reindex`` quietly undid every one of them:
+        renamed functions came back under their old names, labels and aliases
+        vanished, merged versions went back to numbers that now collided. Each edit
+        now lands here first and in the index second, so the rebuild reproduces it.
+
+        ``function`` is the ``{"name", "slug"}`` identity; ``label=None`` clears a
+        label, while leaving ``label`` out leaves it alone. Returns whether a
+        manifest was found to patch.
+        """
+        manifest = self.read_manifest(version_dir)
+        if manifest is None:
+            return False
+        if function is not None:
+            manifest["function"] = {**(manifest.get("function") or {}), **function}
+        version_meta = manifest.setdefault("version", {})
+        if seq is not None:
+            version_meta["seq"] = seq
+        if label is not _UNCHANGED:
+            version_meta["label"] = label
+        _write_json_atomically(Path(version_dir) / "manifest.json", manifest)
+        return True
+
+    def read_aliases(self, function_dir: Path) -> list[tuple[str, bool]] | None:
+        """The aliases recorded beside a function's versions, or ``None`` if none were ever written.
+
+        ``None`` and ``[]`` mean different things on purpose: an absent file is an
+        archive from before aliases were kept on disk, whose aliases may still be
+        recoverable from the index — see :func:`reindex.rebuild`. An unreadable
+        file counts as absent rather than failing the rebuild that reads it.
+        """
+        path = Path(function_dir) / ALIASES_FILENAME
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            LOG.warning("could not read %s: %s", path, exc)
+            return None
+        return [
+            (str(item["pattern"]), bool(item.get("is_regex")))
+            for item in data if isinstance(item, dict) and item.get("pattern")
+        ]
+
+    def write_aliases(self, slug: str, aliases: list[tuple[str, bool]]) -> None:
+        """Record a function's aliases on disk, beside its versions.
+
+        Aliases used to live only in ``index.db``, so a rebuild forgot every one of
+        them and the next download of ``a1b2c3d4.zip`` went back to landing under
+        ``unknown-a1b2c3d4``. Kept inside the function's directory so a rename,
+        which moves that directory, carries them along without being told to.
+        """
+        _write_json_atomically(
+            self.function_dir(slug) / ALIASES_FILENAME,
+            [{"pattern": pattern, "is_regex": is_regex} for pattern, is_regex in sorted(set(aliases))],
+        )
 
     # -- archive handling ------------------------------------------------
     def keep_original(self, zip_path: Path, paths: VersionPaths) -> Path | None:

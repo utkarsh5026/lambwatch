@@ -19,15 +19,13 @@ def _yaml_str(value: object) -> str:
     return json.dumps(str(value))
 
 
-_DIRS = "\n".join(f"    - {_yaml_str(d)}" for d in default_download_dirs())
-
-DEFAULT_CONFIG_YAML = f"""# lambda-watcher configuration
+_CONFIG_TEMPLATE = """# lambda-watcher configuration
 # Every setting below is optional; the values shown are the defaults.
 
 watch:
   # Folders to watch. Add more if you download from several places.
   dirs:
-{_DIRS}
+{dirs}
   extensions: [".zip"]
   # A file must stop changing for this many seconds before it is read, so a
   # half-finished download is never archived.
@@ -46,7 +44,7 @@ watch:
   scan_on_start_max_age_hours: 24
 
 store:
-  root: {_yaml_str(DEFAULT_HOME)}
+  root: {home}
   # copy  = leave the download in place (default)
   # move  = take it out of Downloads once archived, keeping that folder clean
   # leave = archive only the extracted tree, never the .zip
@@ -167,3 +165,21 @@ editor: ""
 
 log_level: INFO
 """
+
+
+def render_config(dirs: list[str] | None = None) -> str:
+    """The annotated config file, with the watch folders filled in.
+
+    ``dirs`` exists because the best guess at a downloads folder is not always the
+    cheap one. :func:`config.default_download_dirs` runs on every command and so
+    must stay fast, which on WSL leaves it unable to choose between two real
+    Windows accounts; ``lw setup`` can afford to ask Windows outright and pass the
+    answer here. Written once, into the file the user will be editing, rather than
+    guessed again on every read.
+    """
+    listed = "\n".join(f"    - {_yaml_str(d)}" for d in (dirs or default_download_dirs()))
+    return _CONFIG_TEMPLATE.format(dirs=listed, home=_yaml_str(DEFAULT_HOME))
+
+
+#: The config as written when nobody has a better idea of where downloads land.
+DEFAULT_CONFIG_YAML = render_config()

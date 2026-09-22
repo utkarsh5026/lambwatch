@@ -379,6 +379,13 @@ class Database:
             (function_id, pattern, int(is_regex)),
         )
 
+    def aliases_for(self, function_id: int) -> list[tuple[str, bool]]:
+        """One function's aliases as ``(pattern, is_regex)`` pairs, which is how they go to disk."""
+        rows = self.conn.execute(
+            "SELECT pattern, is_regex FROM aliases WHERE function_id = ? ORDER BY pattern", (function_id,)
+        ).fetchall()
+        return [(row["pattern"], bool(row["is_regex"])) for row in rows]
+
     def list_aliases(self) -> list[sqlite3.Row]:
         """Every alias, with the name of the function it maps onto."""
         return self.conn.execute(

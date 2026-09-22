@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 import subprocess
@@ -14,6 +15,12 @@ from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
 LOG = logging.getLogger("lambda_watcher")
+
+#: How large the log may get before it rolls over, and how many rolls are kept.
+#: Two megabytes is several months of an ordinary watcher and still small enough
+#: to open in an editor when someone finally needs to read it.
+LOG_MAX_BYTES = 2 * 1024 * 1024
+LOG_BACKUPS = 3
 
 _CHUNK = 1 << 20  # 1 MiB
 
@@ -420,6 +427,10 @@ def setup_logging(level: str = "INFO", log_file: Path | None = None) -> logging.
 
     An unrecognised ``level`` falls back to ``INFO`` rather than raising — a
     typo in the config file should not stop the watcher starting.
+
+    The file rotates at :data:`LOG_MAX_BYTES`. This is a service people install and
+    forget for months, so an un-rotated log is not a tidiness question: it is a file
+    that grows without limit on a machine nobody is watching.
     """
     LOG.setLevel(getattr(logging, str(level).upper(), logging.INFO))
     LOG.handlers.clear()
@@ -427,7 +438,9 @@ def setup_logging(level: str = "INFO", log_file: Path | None = None) -> logging.
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
     if log_file is not None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh = RotatingFileHandler(
+            log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8"
+        )
         fh.setFormatter(fmt)
         LOG.addHandler(fh)
     return LOG

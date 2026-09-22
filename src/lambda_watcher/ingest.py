@@ -353,6 +353,7 @@ class Ingestor:
         report_path, change_summary, change_impact = self._render_report(
             ident.name, slug, function_id, seq, previous
         )
+        self._render_archive_index()
 
         if self.cfg.notify.enabled:
             previous_note = f" (was v{previous['seq']:04d})" if previous else ""
@@ -464,7 +465,7 @@ class Ingestor:
         if not self.cfg.report.auto_diff or previous is None:
             return None, None, None
         # Deferred: the renderer pulls in the whole presentation layer, and an
-        # ingest with nothing to compare against should not pay for the import.
+        # ingest with reports switched off should not pay for the import.
         from .diffing import diff_from_index
         from .diffing.render_html import write_html
 
@@ -485,6 +486,26 @@ class Ingestor:
             LOG.warning("could not render the report for %s v%04d: %s", name, seq, exc)
             return None, None, None
         return target, diff.headline(), diff.impact_line()
+
+    def _render_archive_index(self) -> None:
+        """Rewrite ``reports/index.html``, the page that links every function's reports.
+
+        Runs for every new version, a function's first included — a function
+        appearing is exactly the kind of change that page exists to show, even
+        though :meth:`_render_report` has nothing to compare it against yet. The
+        same two rules apply as there: only when reports are wanted at all
+        (``report.auto_diff``), and never at the cost of an ingest that has
+        already succeeded. See
+        :func:`~lambda_watcher.diffing.build.write_archive_index`.
+        """
+        if not self.cfg.report.auto_diff:
+            return
+        try:
+            from .diffing import write_archive_index
+
+            write_archive_index(self.db, self.cfg.reports_dir)
+        except Exception as exc:                       # noqa: BLE001 - never fail an ingest
+            LOG.warning("could not rewrite the report index: %s", exc)
 
     def _mirror_to_git(
         self, slug: str, code_dir: Path, seq: int, name: str, now: str, tree_hash: str, source: str

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
@@ -17,6 +18,141 @@ import yaml
 
 DEFAULT_HOME = Path(os.environ.get("LAMBDA_WATCHER_HOME", "~/.lambda-watcher")).expanduser()
 CONFIG_ENV_VAR = "LAMBDA_WATCHER_CONFIG"
+
+
+#: Windows profile folders that belong to the system rather than to a person.
+#: Anything under ``/mnt/<drive>/Users`` that is not one of these is somebody's
+#: account, and so a place a browser might really be writing downloads to.
+_WSL_SYSTEM_PROFILES = frozenset({
+    "public", "default", "default user", "all users", "wsiaccount",
+})
+
+#: Where a Windows drive is mounted inside a WSL guest.
+_WSL_MOUNT_ROOT = Path("/mnt")
+
+#: The kernel release string, which is how a WSL guest gives itself away.
+_WSL_OSRELEASE = Path("/proc/sys/kernel/osrelease")
+
+
+def on_wsl() -> bool:
+    """Whether this Linux is really a WSL guest sitting underneath Windows.
+
+    Two signals, because either can be missing on its own: ``WSL_DISTRO_NAME`` is
+    unset for a process a Windows service started rather than the user's shell, and
+    the kernel release — ``5.15.167.4-microsoft-standard-WSL2`` — is the one marker
+    every WSL kernel carries however it was launched.
+    """
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        release = _WSL_OSRELEASE.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return "microsoft" in release.lower()
+
+
+def windows_downloads_on_wsl() -> list[Path]:
+    """The Windows-side Downloads folder this WSL guest can see, when there is one.
+
+    On WSL the browser is a Windows program, so the folder that fills up is
+    ``/mnt/c/Users/Someone/Downloads`` while the Linux ``~/Downloads`` frequently
+    does not exist at all. Getting this wrong is not a cosmetic miss — it is the
+    difference between a watcher that archives and one that calls itself healthy
+    for weeks having seen nothing.
+
+    Deliberately cheap: a glob and a few stats, no subprocess, because this runs
+    on every ``Config()`` construction and so on every command the user types.
+    That cheapness is also its limit — it cannot tell two real people apart, so a
+    machine with more than one populated profile gets nothing back rather than a
+    coin toss between them. :func:`windows_home_on_wsl` is the slower call that
+    asks Windows itself, and ``lw setup`` is where it is worth paying for.
+    """
+    found: list[Path] = []
+    try:
+        user_roots = sorted(_WSL_MOUNT_ROOT.glob("*/Users"))
+    except OSError:
+        return found
+    for users in user_roots:
+        try:
+            profiles = sorted(users.iterdir())
+        except OSError:
+            continue
+        for profile in profiles:
+            if profile.name.lower() in _WSL_SYSTEM_PROFILES:
+                continue
+            downloads = profile / "Downloads"
+            try:
+                if downloads.is_dir():
+                    found.append(downloads)
+            except OSError:
+                continue
+    return found if len(found) == 1 else []
+
+
+def windows_home_on_wsl() -> Path | None:
+    """Ask Windows itself which profile is the one logged in, e.g. ``/mnt/c/Users/Sam``.
+
+    ``windows_downloads_on_wsl`` gives up when a machine has several real accounts
+    on it, and this is how that is settled: ``%USERPROFILE%`` is the answer Windows
+    would give its own programs. It costs a subprocess and roughly a tenth of a
+    second, so it belongs in ``lw setup``, ``lw init`` and ``lw doctor`` — commands
+    that write or diagnose a config — never on the path every command pays for.
+
+    Returns ``None`` rather than raising for every way this can fail: no interop,
+    no ``wslpath``, a slow or wedged ``cmd.exe``. A guess that cannot be made is
+    not an error; it just leaves the caller with the cheap answer.
+    """
+    if not on_wsl():
+        return None
+    # cmd.exe cannot sit in a Linux directory: from one it prints a UNC warning and
+    # relocates itself, so the profile path arrives buried in chatter. Start it
+    # somewhere it can stand, and read back only the line shaped like a Windows path.
+    cwd = _WSL_MOUNT_ROOT if _WSL_MOUNT_ROOT.is_dir() else Path("/")
+    try:
+        completed = subprocess.run(
+            ["cmd.exe", "/C", "echo %USERPROFILE%"],
+            capture_output=True, text=True, timeout=10, cwd=str(cwd),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    windows_path = ""
+    for line in completed.stdout.splitlines():
+        candidate = line.strip().strip('"')
+        if re.match(r"^[A-Za-z]:\\", candidate):
+            windows_path = candidate
+            break
+    if not windows_path:
+        return None
+    try:
+        translated = subprocess.run(
+            ["wslpath", "-u", windows_path],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    home = translated.stdout.strip()
+    return Path(home) if home else None
+
+
+def needs_polling(directory: Path) -> bool:
+    """Whether this folder only ever reports changes if we go and look.
+
+    A WSL guest receives no inotify events at all for the Windows drives under
+    ``/mnt``: the kernel that owns those files is not the one running inotify. A
+    watcher there starts cleanly, says it is watching, and never fires once.
+
+    Deciding it per directory at start-up, rather than leaving it to
+    ``watch.force_polling``, is what carries the fix to someone whose config was
+    written before this existed — they get a watcher that works without being
+    asked to edit anything. Drop this and those archives silently stop growing.
+    """
+    if not on_wsl():
+        return False
+    try:
+        resolved = directory.resolve()
+    except OSError:
+        resolved = directory
+    return resolved == _WSL_MOUNT_ROOT or _WSL_MOUNT_ROOT in resolved.parents
 
 
 def default_download_dirs() -> list[str]:
@@ -34,6 +170,8 @@ def default_download_dirs() -> list[str]:
                     candidates.append(Path(raw))
             except OSError:
                 pass
+        if on_wsl():
+            candidates.extend(windows_downloads_on_wsl())
     candidates.append(Path("~/Downloads").expanduser())
     seen: list[str] = []
     for c in candidates:
@@ -308,6 +446,17 @@ class Config:
         """``<root>/quarantine/`` — archives that could not be extracted, plus a reason file."""
         return self.root / "quarantine"
 
+    @property
+    def heartbeat_path(self) -> Path:
+        """``<root>/state/watcher.json`` — what the running watcher says about itself.
+
+        Kept out of ``index.db`` deliberately: it is the one piece of state that has
+        to be readable when the database is locked, mid-rebuild or absent, because
+        the question it answers — is the watcher alive — is most often asked when
+        something else has already gone wrong.
+        """
+        return self.root / "state" / "watcher.json"
+
     def ensure_dirs(self) -> None:
         """Create the archive directories that must exist, ignoring ones that already do.
 
@@ -362,6 +511,60 @@ def default_config_path() -> Path:
     return DEFAULT_HOME / "config.yaml"
 
 
+#: Each top-level section of the config file and the dataclass it fills. One map
+#: rather than a list repeated per call site, so :func:`load_config` and
+#: :func:`unknown_keys` cannot disagree about what a valid section is.
+CONFIG_SECTIONS: dict[str, type] = {
+    "watch": WatchConfig,
+    "store": StoreConfig,
+    "naming": NamingConfig,
+    "analysis": AnalysisConfig,
+    "diff": DiffConfig,
+    "git_mirror": GitMirrorConfig,
+    "notify": NotifyConfig,
+    "report": ReportConfig,
+}
+
+#: Settings that sit at the top level rather than inside a section.
+CONFIG_SCALARS = frozenset({"editor", "log_level"})
+
+
+def unknown_keys(path: Path | str | None = None) -> list[str]:
+    """Settings in the config file that nothing reads, e.g. ``watch.dir`` for ``dirs``.
+
+    :func:`_from_dict` ignores what it does not recognise, which is what lets a
+    config written by an older release still load. The cost is silence in the one
+    case that matters most: write ``dir:`` for ``dirs:`` and the tool watches its
+    default folder while you believe it is watching yours, with no error, ever.
+
+    So the keys stay ignored and become *reportable* instead — ``lw doctor`` names
+    them. Returns dotted names, sorted. A file that cannot be read or is not a
+    mapping returns nothing; saying what is wrong with it is :func:`load_config`'s
+    job and it does it more loudly.
+    """
+    cfg_path = Path(path).expanduser() if path else default_config_path()
+    try:
+        loaded = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    if not isinstance(loaded, dict):
+        return []
+
+    unknown: list[str] = []
+    for key, value in loaded.items():
+        if key in CONFIG_SCALARS:
+            continue
+        section = CONFIG_SECTIONS.get(key)
+        if section is None:
+            unknown.append(str(key))
+            continue
+        if not isinstance(value, dict):
+            continue
+        known = {f.name for f in fields(section)}
+        unknown.extend(f"{key}.{name}" for name in value if name not in known)
+    return sorted(unknown)
+
+
 def load_config(path: Path | str | None = None) -> Config:
     """Load config from YAML, falling back to defaults for anything absent."""
     cfg_path = Path(path).expanduser() if path else default_config_path()
@@ -373,14 +576,7 @@ def load_config(path: Path | str | None = None) -> Config:
         data = loaded
 
     cfg = Config(
-        watch=_from_dict(WatchConfig, data.get("watch", {})),
-        store=_from_dict(StoreConfig, data.get("store", {})),
-        naming=_from_dict(NamingConfig, data.get("naming", {})),
-        analysis=_from_dict(AnalysisConfig, data.get("analysis", {})),
-        diff=_from_dict(DiffConfig, data.get("diff", {})),
-        git_mirror=_from_dict(GitMirrorConfig, data.get("git_mirror", {})),
-        notify=_from_dict(NotifyConfig, data.get("notify", {})),
-        report=_from_dict(ReportConfig, data.get("report", {})),
+        **{name: _from_dict(cls, data.get(name, {})) for name, cls in CONFIG_SECTIONS.items()},
         editor=data.get("editor", ""),
         log_level=data.get("log_level", "INFO"),
     )
