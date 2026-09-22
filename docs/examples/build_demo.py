@@ -325,6 +325,10 @@ def publish_report(home: Path) -> None:
     published copy. Everything the report computed about them — the findings
     table, the counts, the redacted previews — is untouched, and running the
     builder locally gives you the unmasked report.
+
+    The top bar's "All functions" crumb is unlinked too: it points at
+    ``../index.html``, the archive's front page, which is not published, so on
+    Pages it would be a link to nothing.
     """
     src = home / "reports" / "order-processor"
     dest = REPO / "docs" / "examples" / "report"
@@ -339,8 +343,11 @@ def publish_report(home: Path) -> None:
             secret = fake_secret(kind)
             text = text.replace(secret, secret[:4] + "\u2022" * (len(secret) - 4))
         if text != original:
-            page.write_text(text, encoding="utf-8")
             masked += 1
+        text = text.replace('<a href="../index.html">All functions</a>',
+                            "<span>All functions</span>")
+        if text != original:
+            page.write_text(text, encoding="utf-8")
 
     print(f"\n\nPublished the HTML report to {dest.relative_to(REPO)}/"
           f" ({masked} page(s) with the fixture credentials masked)")
