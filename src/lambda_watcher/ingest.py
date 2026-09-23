@@ -480,8 +480,10 @@ class Ingestor:
             target_dir = self.cfg.reports_dir / slug
             target_dir.mkdir(parents=True, exist_ok=True)
             target = target_dir / f"v{int(previous['seq']):04d}-v{seq:04d}.html"
-            write_html(diff, target)
-            write_html(diff, target_dir / "latest.html")
+            # Both pages sit in reports/<slug>/, one level under the archive
+            # index that _render_archive_index rewrites right after this.
+            write_html(diff, target, archive_href="../index.html")
+            write_html(diff, target_dir / "latest.html", archive_href="../index.html")
         except Exception as exc:                       # noqa: BLE001 - never fail an ingest
             LOG.warning("could not render the report for %s v%04d: %s", name, seq, exc)
             return None, None, None

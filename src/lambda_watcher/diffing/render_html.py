@@ -29,13 +29,20 @@ _Painted = list[tuple[str, str]] | None
 CSS = """
 :root {
   color-scheme: light dark;
-  --bg: #ffffff; --panel: #fafbfc; --sunken: #f1f4f7; --border: #e2e6eb;
-  --rule: #eceff3; --text: #12161b; --muted: #5b6672; --faint: #8a939f;
-  --accent: #0a58ca; --accent-wash: #eaf1fd; --accent-edge: #cfe0fa;
-  --add-bg: #e9f7ee; --add-word: #b4ecc6; --add-gutter: #d5efdd; --add-fg: #0a6634;
-  --del-bg: #fdedef; --del-word: #f8c4cb; --del-gutter: #f7d5da; --del-fg: #96162a;
-  --warn-bg: #f7ecd2; --warn-fg: #6b4a06;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Surfaces step up from the page to the card to the sunken well inside it, so
+     the sections read as sections without a heavy rule drawn round each one. */
+  --page: #f6f7f9; --card: #ffffff; --panel: #fafbfc; --sunken: #f1f3f6;
+  --border: #e4e7ec; --rule: #eef0f3; --text: #111827; --muted: #5d6675; --faint: #8b93a1;
+  --accent: #4f56d8; --accent-wash: #eef0ff; --accent-edge: #d7dafd;
+  --add-bg: #ecf8f1; --add-word: #b8ebcb; --add-gutter: #d9f1e3; --add-fg: #0d7a40;
+  --del-bg: #fdf0f1; --del-word: #f7c9cf; --del-gutter: #f8dde1; --del-fg: #b4233a;
+  --warn-bg: #fdf5e3; --warn-edge: #f3dfae; --warn-fg: #8a5a00;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .06);
+  --radius: 12px;
+  --sans: "Inter", "InterVariable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
   /* Syntax tokens, One Light. Numbers and constants share a colour on purpose:
      both are literal values, and the eye reads them as the same thing. */
   --tk-c: #8b8f97; --tk-k: #a626a4; --tk-s: #50a14f; --tk-n: #986801;
@@ -43,119 +50,210 @@ CSS = """
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1117; --panel: #12171e; --sunken: #1a212a; --border: #262d36;
-    --rule: #1e242c; --text: #e3e9ef; --muted: #96a0ac; --faint: #6e7885;
-    --accent: #6cb0ff; --accent-wash: #16253c; --accent-edge: #294869;
-    --add-bg: #0e2417; --add-word: #1f5c34; --add-gutter: #14311f; --add-fg: #6ddb92;
-    --del-bg: #2a1319; --del-word: #6d2029; --del-gutter: #3b181f; --del-fg: #ff949e;
-    --warn-bg: #3a2d10; --warn-fg: #e6c169;
+    --page: #0b0d12; --card: #12151c; --panel: #161a22; --sunken: #1b2029;
+    --border: #252b36; --rule: #1d222b; --text: #e6e9ef; --muted: #99a2b0; --faint: #6c7584;
+    --accent: #8f95ff; --accent-wash: #1c1f3a; --accent-edge: #30356a;
+    --add-bg: #0f2519; --add-word: #1f5a35; --add-gutter: #143020; --add-fg: #6fdc97;
+    --del-bg: #2a1319; --del-word: #6d2029; --del-gutter: #3a1920; --del-fg: #ff97a2;
+    --warn-bg: #2d2412; --warn-edge: #4a3a16; --warn-fg: #ebc56f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 0 0 1px rgba(255, 255, 255, .01);
     --tk-c: #7f848e; --tk-k: #c678dd; --tk-s: #98c379; --tk-n: #d19a66;
     --tk-t: #d19a66; --tk-f: #61afef; --tk-y: #56b6c2;
   }
 }
 * { box-sizing: border-box; }
 body {
-  margin: 0; background: var(--bg); color: var(--text);
-  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
+  margin: 0; background: var(--page); color: var(--text);
+  font: 14px/1.55 var(--sans); font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
-a { color: var(--accent); }
-.wrap { max-width: 1140px; margin: 0 auto; padding: 32px 24px 96px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px 80px; }
 
-/* ---- header ---------------------------------------------------------- */
-header.top { padding-bottom: 18px; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
-h1 { font-size: 22px; font-weight: 650; margin: 0; letter-spacing: -0.015em;
-  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-h1 .ver { font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: 0;
+/* ---- top bar --------------------------------------------------------- */
+/* Every page carries the same bar, so the three kinds of page read as one
+   site: where you are, and the way back to the archive's front page. */
+.topbar { position: relative; z-index: 7; background: var(--card);
+  border-bottom: 1px solid var(--border); }
+.topbar .inner { max-width: 1140px; margin: 0 auto; padding: 0 24px; height: 52px;
+  display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.brand { display: inline-flex; align-items: center; gap: 9px; font-weight: 600;
+  color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
+.brand .logo { display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 7px; color: #fff; font-size: 14px; font-weight: 700;
+  background: linear-gradient(135deg, #6d74f2, #4148c9); box-shadow: inset 0 -1px 0 rgba(0,0,0,.18); }
+.crumbs { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted); }
+.crumbs .sep { color: var(--border); font-size: 18px; font-weight: 300; }
+.crumbs a { color: var(--muted); white-space: nowrap; }
+.crumbs a:hover { color: var(--text); text-decoration: none; }
+.crumbs .here { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.topbar .when { margin-left: auto; color: var(--faint); font-size: 12px; white-space: nowrap; }
+
+/* ---- page header ----------------------------------------------------- */
+header.top { padding: 34px 0 26px; }
+.eyebrow { font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: .02em;
+  margin-bottom: 8px; }
+h1 { font-size: 28px; font-weight: 700; margin: 0; letter-spacing: -0.025em; line-height: 1.2;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; overflow-wrap: anywhere; }
+h1 .ver { font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: 0;
   color: var(--accent); font-variant-numeric: tabular-nums;
   background: var(--accent-wash); border: 1px solid var(--accent-edge);
-  border-radius: 5px; padding: 2px 8px; white-space: nowrap; }
-h1 .ver .arrow { color: var(--faint); padding: 0 5px; font-weight: 400; }
+  border-radius: 999px; padding: 3px 11px; white-space: nowrap; }
+h1 .ver .arrow { color: var(--faint); padding: 0 6px; font-weight: 400; }
 .sub { color: var(--muted); font-size: 13px; }
-header.top .sub { margin-top: 9px; }
+.lead { color: var(--muted); font-size: 15px; margin-top: 8px; }
+/* The two versions being compared, as a pair of stamps with the direction of
+   travel between them — the header's one piece of real information after the
+   name, so it gets drawn rather than buried in a sentence. */
+.stamps { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.stamp { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 9px;
+  box-shadow: var(--shadow); font-size: 12.5px; color: var(--muted); }
+.stamp b { font-family: var(--mono); font-weight: 600; color: var(--text); font-size: 12.5px; }
+.stamps .to { color: var(--faint); }
 
-/* A heading that carries a hairline to the end of the measure: the sections
-   read as sections without a box drawn round each one. */
-h2 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em;
-  color: var(--muted); margin: 32px 0 12px; display: flex; align-items: center; gap: 12px; }
-h2::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
-
-/* ---- summary rail ---------------------------------------------------- */
-/* One panel divided by hairlines rather than six floating cards. These numbers
+/* ---- summary --------------------------------------------------------- */
+/* One card divided by hairlines rather than six floating cards. These numbers
    are meant to be read across, and separate boxes put a gutter between every
-   pair of them. */
-.stats { display: flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 10px;
-  background: var(--panel); overflow: hidden; }
-.stat { flex: 1 1 150px; padding: 11px 16px; border-left: 1px solid var(--border); min-width: 0; }
+   pair of them. The label sits above its number, where the eye starts. */
+.stats { display: flex; flex-wrap: wrap; background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; margin-bottom: 20px; }
+.stat { flex: 1 1 150px; padding: 16px 20px; border-left: 1px solid var(--rule); min-width: 0;
+  display: flex; flex-direction: column-reverse; justify-content: space-between; gap: 4px; }
 .stat:first-child { border-left: none; }
-.stat .v { font-size: 19px; font-weight: 620; letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 7px; }
+.stat .v { font-size: 24px; font-weight: 650; letter-spacing: -0.03em; line-height: 1.15;
+  font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 8px; }
 .stat .v .delta { font-size: 12px; font-weight: 500; color: var(--muted);
   letter-spacing: 0; white-space: nowrap; }
-.stat .k { color: var(--muted); font-size: 12px; margin-top: 1px; }
-.stat .k .hint { color: var(--faint); }
+.stat .k { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.stat .k .hint { color: var(--faint); font-weight: 400; }
 .stat[title] { cursor: help; }
+.stat.alert .v { color: var(--del-fg); }
 .add { color: var(--add-fg); } .del { color: var(--del-fg); }
+
+/* ---- cards and their headings ---------------------------------------- */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); margin-bottom: 20px; }
+.card > .scroll, .card > table.grid { padding: 0 20px 6px; }
+.sec-head { display: flex; align-items: center; gap: 10px; padding: 14px 20px 12px; }
+h2 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; margin: 0; color: var(--text); }
+.count { font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--sunken);
+  border-radius: 999px; padding: 1px 8px; font-variant-numeric: tabular-nums; }
+.sec-head .aside { margin-left: auto; color: var(--faint); font-size: 12.5px; }
+/* A section that asks the reader to do something before deploying wears a
+   tinted edge, so it is the first thing a scroll lands on. */
+.card.warn { border-color: var(--warn-edge); }
+.card.warn .sec-head { background: var(--warn-bg); border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 1px solid var(--warn-edge); margin-bottom: 6px; }
+.card.warn h2 { color: var(--warn-fg); }
+.card.danger { border-color: var(--del-gutter); }
+.card.danger .sec-head { background: var(--del-bg); border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 1px solid var(--del-gutter); margin-bottom: 6px; }
+.card.danger h2 { color: var(--del-fg); }
+.sec-head .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.card.warn .sec-head .dot { color: var(--warn-fg); }
+.card.danger .sec-head .dot { color: var(--del-fg); }
+.card .foot { padding: 10px 20px 14px; border-top: 1px solid var(--rule); }
 
 /* ---- tables ---------------------------------------------------------- */
 .scroll { overflow-x: auto; }
 table.grid { border-collapse: collapse; font-size: 13px; width: 100%; }
-table.grid th { text-align: left; color: var(--faint); font-weight: 600; font-size: 11px;
-  text-transform: uppercase; letter-spacing: .06em; padding: 0 20px 6px 0;
-  border-bottom: 1px solid var(--border); white-space: nowrap; }
-table.grid td { padding: 7px 20px 7px 0; border-bottom: 1px solid var(--rule);
-  vertical-align: top; white-space: nowrap; }
+.card > table.grid { width: calc(100% - 40px); margin: 0 20px 6px; padding: 0; }
+table.grid th { text-align: left; color: var(--faint); font-weight: 500; font-size: 12px;
+  padding: 8px 20px 8px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.grid td { padding: 11px 20px 11px 0; border-bottom: 1px solid var(--rule);
+  vertical-align: middle; white-space: nowrap; }
 table.grid th:last-child, table.grid td:last-child { padding-right: 0; width: 100%;
   white-space: normal; }
 table.grid tr:last-child td { border-bottom: none; }
-table.grid tbody tr:hover td { background: var(--panel); }
-table.grid td.label { width: 210px; color: var(--muted); }
+table.grid td.label { width: 230px; color: var(--muted); vertical-align: top; }
+table.grid td.label + td { white-space: normal; }
 .mono { font-family: var(--mono); font-size: 12.5px; }
+/* Code is quoted, not typeset: a font that fuses ``==`` into one glyph would
+   show a character the file does not contain. */
+.mono, .diff, .wordedit, .tok, .cmd, .p, code { font-variant-ligatures: none; }
 .num { font-variant-numeric: tabular-nums; text-align: right; }
+table.grid th.num { text-align: right; }
+.arrow { color: var(--faint); padding: 0 6px; }
+.dim { color: var(--faint); }
+.fn-name { font-weight: 600; color: var(--text); }
 
 /* ---- labels ---------------------------------------------------------- */
 /* Two different things wear a label here, so they are drawn differently: a
-   `chip` classifies a row, a `tok` *is* a name out of the code. */
-.chip { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10.5px;
-  font-weight: 650; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
-  background: var(--sunken); color: var(--muted); }
+   `chip` classifies a row, a `tok` *is* a name out of the code. A chip leads
+   with a dot in its own colour, so the kind still reads at a glance when the
+   word is too small to. */
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 8px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  line-height: 1.5; background: var(--sunken); color: var(--muted); }
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  opacity: .85; flex: 0 0 auto; }
 .chip.added   { background: var(--add-gutter); color: var(--add-fg); }
 .chip.removed { background: var(--del-gutter); color: var(--del-fg); }
-.chip.modified { background: var(--accent-wash); color: var(--accent); }
+.chip.modified, .chip.changed { background: var(--accent-wash); color: var(--accent); }
+.chip.renamed { background: var(--warn-bg); color: var(--warn-fg); }
 .chip.high   { background: var(--del-gutter); color: var(--del-fg); }
 .chip.medium { background: var(--warn-bg); color: var(--warn-fg); }
-.tok { display: inline-block; font-family: var(--mono); font-size: 12px; padding: 1px 7px;
-  border-radius: 4px; background: var(--sunken); border: 1px solid var(--border); }
+.chip.label  { background: var(--accent-wash); color: var(--accent); font-weight: 500; }
+.chip.label::before { display: none; }
+.tok { display: inline-block; font-family: var(--mono); font-size: 12px; padding: 2px 8px;
+  margin: 0 4px 4px 0; border-radius: 6px; background: var(--sunken); border: 1px solid var(--border); }
 .tok.added   { background: var(--add-bg); border-color: var(--add-gutter); color: var(--add-fg); }
-.tok.removed { background: var(--del-bg); border-color: var(--del-gutter); color: var(--del-fg); }
+.tok.removed { background: var(--del-bg); border-color: var(--del-gutter); color: var(--del-fg);
+  text-decoration: line-through; text-decoration-color: rgba(180, 35, 58, .45); }
+.cmd { font-family: var(--mono); font-size: 12px; background: var(--sunken); color: var(--text);
+  border: 1px solid var(--border); padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
 
 /* ---- toolbar --------------------------------------------------------- */
-.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
-  position: sticky; top: 0; background: var(--bg); padding: 10px 0; z-index: 6;
-  box-shadow: 0 1px 0 var(--border); }
-.toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; color: var(--faint); }
-.toolbar input[type=search] { flex: 1 1 240px; min-width: 150px; padding: 7px 11px; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px; }
-.toolbar input[type=search]:focus { outline: none; border-color: var(--accent);
+/* Sticks to the top of the window while the list scrolls under it, and stops
+   at the bottom of its own card, so it never floats over a different section. */
+.toolbar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 6; padding: 10px 20px; background: var(--card);
+  border-top: 1px solid var(--rule); border-bottom: 1px solid var(--border); }
+.toolbar #shown-count { margin-left: auto; white-space: nowrap; flex: 0 0 auto; color: var(--faint);
+  font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.search { position: relative; flex: 1 1 260px; min-width: 160px; display: flex; }
+.search svg { position: absolute; left: 10px; top: 50%; width: 15px; height: 15px; margin-top: -7.5px;
+  fill: none; stroke: var(--faint); stroke-width: 1.7; stroke-linecap: round; pointer-events: none; }
+.search input { width: 100%; padding: 7px 11px 7px 32px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit;
+  font-size: 13px; transition: border-color .15s, box-shadow .15s, background .15s; }
+.search input::placeholder { color: var(--faint); }
+.search input:focus { outline: none; border-color: var(--accent); background: var(--card);
   box-shadow: 0 0 0 3px var(--accent-wash); }
-.toolbar label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px;
-  align-items: center; cursor: pointer; user-select: none; }
+/* The vendored filter is a switch rather than a bare checkbox: it is a view
+   setting, on or off, and a switch says so without a sentence. */
+.switch { color: var(--muted); font-size: 13px; display: inline-flex; gap: 8px;
+  align-items: center; cursor: pointer; user-select: none; white-space: nowrap; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .track { position: relative; width: 30px; height: 18px; border-radius: 999px;
+  background: var(--border); transition: background .15s; flex: 0 0 auto; }
+.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25);
+  transition: transform .15s ease; }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::after { transform: translateX(12px); }
+.switch input:focus-visible + .track { box-shadow: 0 0 0 3px var(--accent-wash); }
 
 /* ---- the file list --------------------------------------------------- */
-/* One panel of rows rather than a stack of cards, because the list is an index
-   now: the diff it points at opens beside it instead of pushing the rest of
-   the list down the page. A row is a button, since that is what it does. */
-.files { border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
-  background: var(--panel); }
+/* One panel of rows rather than a stack of cards, because the list is an index:
+   the diff it points at opens beside it instead of pushing the rest of the
+   list down the page. A row is a button, since that is what it does. */
+.files { border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; }
 .file { border-top: 1px solid var(--rule); }
 /* Transparent rather than absent so every row is the same height, whichever
    one the filter left at the top. */
 .file:first-child, .file.first-shown { border-top-color: transparent; }
-.row { display: flex; gap: 10px; align-items: center; width: 100%; padding: 9px 14px;
+.row { display: flex; gap: 12px; align-items: center; width: 100%; padding: 10px 20px;
   font: inherit; color: var(--text); text-align: left; background: none; border: 0;
-  cursor: pointer; }
-.row:hover { background: var(--sunken); }
+  cursor: pointer; transition: background .12s ease; }
+.row:hover { background: var(--panel); }
 .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* One width for every kind, so the paths start in one column and the eye can
+   run straight down them. */
+.row .chip { min-width: 90px; }
 /* The chevron points where the diff will appear: to the side, not downwards.
    Drawn in CSS because a vendored diff runs to thousands of rows, and each one
    would otherwise carry its own copy of the glyph. */
@@ -165,27 +263,37 @@ table.grid td.label { width: 210px; color: var(--muted); }
 .row:hover::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
 .file.active .row { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
 .file.active .row::after { border-color: var(--accent); transform: translateX(2px) rotate(45deg); }
-.row .path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.row .path { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .row .path .p { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+/* The directory part of a path is quieter than its name, which is the part a
+   reader is scanning for. */
+.path .dir { color: var(--faint); }
 /* The tint hugs the changed part exactly — padding here would open a gap in
    the middle of a path and read as though the name contained a space. */
-.path .ren { background: var(--sunken); border-radius: 3px; }
+.path .ren { background: var(--warn-bg); border-radius: 3px; }
 .path .was { color: var(--faint); }
 .stat-line { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap;
-  display: flex; gap: 8px; align-items: baseline; color: var(--faint); }
+  display: flex; gap: 8px; align-items: center; color: var(--faint); }
+.stat-line .add, .stat-line .del { font-weight: 600; }
+/* Five squares split between added and removed lines, the way a code host
+   draws them: the proportion reads faster than the two numbers beside it. */
+.bar { display: inline-flex; gap: 2px; }
+.bar i { width: 7px; height: 7px; border-radius: 2px; background: var(--border); }
+.bar i.a { background: var(--add-fg); }
+.bar i.d { background: var(--del-fg); }
 
 /* ---- the diff itself ------------------------------------------------- */
 .diff { overflow-x: auto; border-top: 1px solid var(--border); }
 .diff table { border-collapse: collapse; width: 100%; font-family: var(--mono);
-  font-size: 12.5px; line-height: 1.5; }
+  font-size: 12.5px; line-height: 1.6; }
 .diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
-.diff td.ln { width: 1%; min-width: 40px; padding: 0 8px; text-align: right; color: var(--faint);
+.diff td.ln { width: 1%; min-width: 44px; padding: 0 10px; text-align: right; color: var(--faint);
   user-select: none; background: var(--panel); font-variant-numeric: tabular-nums; }
-.diff td.ln + td.ln { border-right: 1px solid var(--border); }
+.diff td.ln + td.ln { border-right: 1px solid var(--rule); }
 /* The sign lives in its own unselectable cell so that copying a block of the
    diff yields the code, not code with markers glued on. It doubles as the
    spine marking how far an added or removed run reaches. */
-.diff td.mark { width: 1%; padding: 0 4px 0 6px; text-align: center; color: var(--faint);
+.diff td.mark { width: 1%; padding: 0 4px 0 8px; text-align: center; color: var(--faint);
   user-select: none; border-left: 2px solid transparent; }
 .diff td.code { padding-left: 4px; width: 100%; }
 .diff tr.add td.code, .diff tr.add td.mark { background: var(--add-bg); }
@@ -194,8 +302,8 @@ table.grid td.label { width: 210px; color: var(--muted); }
 .diff tr.del td.code, .diff tr.del td.mark { background: var(--del-bg); }
 .diff tr.del td.mark { color: var(--del-fg); border-left-color: var(--del-fg); }
 .diff tr.del td.ln { background: var(--del-gutter); color: var(--del-fg); }
-.diff tr.hunk td { background: var(--sunken); color: var(--faint); font-size: 11.5px;
-  padding: 4px 10px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.diff tr.hunk td { background: var(--accent-wash); color: var(--accent); font-size: 11.5px;
+  padding: 5px 12px; border-top: 1px solid var(--accent-edge); border-bottom: 1px solid var(--accent-edge); }
 .diff tr.hunk:first-child td { border-top: none; }
 /* Which words of the line actually changed. This sits on top of the row wash,
    so it has to be a step stronger than it in both themes. */
@@ -209,9 +317,9 @@ tr.del .wd { background: var(--del-word); }
 .wordedit { overflow-x: auto; border-top: 1px solid var(--border); }
 .wordedit table { border-collapse: collapse; width: 100%; font-family: var(--mono);
   font-size: 12px; line-height: 1.7; }
-.wordedit td { padding: 1px 8px; white-space: pre; vertical-align: top; }
+.wordedit td { padding: 2px 10px; white-space: pre; vertical-align: top; }
 .wordedit td.at { width: 1%; text-align: right; color: var(--faint);
-  background: var(--sunken); border-right: 1px solid var(--border); }
+  background: var(--panel); border-right: 1px solid var(--rule); }
 .wordedit td.run { width: 100%; color: var(--faint); }
 .wordedit .was { background: var(--del-word); color: var(--del-fg); border-radius: 3px; }
 .wordedit .was.gone { text-decoration: line-through; }
@@ -223,13 +331,18 @@ tr.del .wd { background: var(--del-word); }
 .tk-t { color: var(--tk-t); }
 .tk-f { color: var(--tk-f); }
 .tk-y { color: var(--tk-y); }
-.note { color: var(--muted); font-size: 12.5px; padding: 10px 12px; border-top: 1px solid var(--border); }
-.note code { font-family: var(--mono); font-size: 12px; background: var(--sunken);
+.note { color: var(--muted); font-size: 12.5px; padding: 12px 16px; border-top: 1px solid var(--border);
+  background: var(--panel); }
+.note code, .sub code { font-family: var(--mono); font-size: 12px; background: var(--sunken);
   padding: 1px 5px; border-radius: 4px; }
-.empty { color: var(--muted); padding: 16px 0; }
-footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border);
-  color: var(--faint); font-size: 12px; line-height: 1.7; }
-.moved-list { margin: 0; padding: 10px 16px 12px 34px; list-style: disc;
+/* Nothing to list is a normal answer, not an error, so it is drawn calmly: a
+   sentence in the middle of a card, and the command to type next. */
+.empty { color: var(--muted); padding: 40px 24px; text-align: center; background: var(--card);
+  border: 1px dashed var(--border); border-radius: var(--radius); }
+.empty .big { display: block; color: var(--text); font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+footer { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border);
+  color: var(--faint); font-size: 12px; line-height: 1.8; }
+.moved-list { margin: 0; padding: 12px 20px 14px 38px; list-style: disc;
   color: var(--muted); font-size: 12px; line-height: 1.9; }
 .moved-list .hint { color: var(--faint); }
 /* ---- the sheet ------------------------------------------------------- */
@@ -243,12 +356,13 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
    no room to dock and half a diff is worse than a covered list. */
 :root { --sheet-w: 760px; }
 .scrim { position: fixed; inset: 0; z-index: 30; background: rgba(8, 13, 20, .44);
+  backdrop-filter: blur(2px);
   opacity: 0; visibility: hidden; transition: opacity .26s ease, visibility 0s linear .26s; }
 body.sheet-open .scrim { opacity: 1; visibility: visible; transition: opacity .26s ease; }
 .sheet { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
   width: min(100%, var(--sheet-w)); display: flex; flex-direction: column;
-  background: var(--bg); border-left: 1px solid var(--border);
-  box-shadow: -24px 0 60px -30px rgba(6, 11, 18, .5);
+  background: var(--card); border-left: 1px solid var(--border);
+  box-shadow: -24px 0 60px -30px rgba(6, 11, 18, .45);
   /* `visibility` rather than `display`, so the sheet can animate out and still
      leave nothing behind for the keyboard to land on while it is shut. It turns
      visible on the same frame it is asked to — a transition would leave it
@@ -258,8 +372,8 @@ body.sheet-open .scrim { opacity: 1; visibility: visible; transition: opacity .2
   transition: transform .26s cubic-bezier(.22, .61, .36, 1), visibility 0s linear .26s; }
 body.sheet-open .sheet { transform: none; visibility: visible;
   transition: transform .26s cubic-bezier(.22, .61, .36, 1); }
-.sheet-head { padding: 12px 14px 11px; border-bottom: 1px solid var(--border);
-  background: var(--panel); display: flex; flex-direction: column; gap: 7px; }
+.sheet-head { padding: 14px 16px 12px 18px; border-bottom: 1px solid var(--border);
+  background: var(--card); display: flex; flex-direction: column; gap: 8px; }
 .sheet-bar { display: flex; align-items: center; gap: 10px; }
 .sheet-title { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .sheet-title .path { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -267,14 +381,15 @@ body.sheet-open .sheet { transform: none; visibility: visible;
   overflow-wrap: anywhere; }
 /* Wrapping rather than clipping: a file whose counts are a sentence — "missing
    from the archive" — is exactly the one whose reader needs to read them. */
-.sheet-sub { display: flex; align-items: baseline; gap: 12px; min-height: 18px;
+.sheet-sub { display: flex; align-items: center; gap: 12px; min-height: 18px;
   flex-wrap: wrap; color: var(--faint); font-size: 12px; }
-.sheet-sub .ver { margin-left: auto; font-family: var(--mono); white-space: nowrap; }
+.sheet-sub .ver { margin-left: auto; font-family: var(--mono); white-space: nowrap;
+  color: var(--muted); background: var(--sunken); border-radius: 999px; padding: 1px 9px; }
 .sheet-nav { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
-.sheet-nav .pos { color: var(--faint); font-size: 12px; padding: 0 3px;
+.sheet-nav .pos { color: var(--faint); font-size: 12px; padding: 0 4px;
   font-variant-numeric: tabular-nums; white-space: nowrap; }
 .iconbtn { display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid transparent;
+  width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid transparent;
   background: none; color: var(--muted); cursor: pointer; }
 .iconbtn:hover:not(:disabled) { background: var(--sunken); border-color: var(--border);
   color: var(--text); }
@@ -310,13 +425,35 @@ body.dragging, body.dragging .sheet { transition: none; }
 @media (max-width: 1279.98px) {
   body.sheet-open { overflow: hidden; }
 }
+/* A phone: the rail folds into two columns, and the row drops its counts
+   under the path rather than squeezing the path into a sliver. */
+@media (max-width: 640px) {
+  .wrap, .topbar .inner { padding-left: 16px; padding-right: 16px; }
+  .topbar .when, .brand .name, .stamps .to { display: none; }
+  .topbar .inner { overflow: hidden; }
+  .crumbs { overflow: hidden; }
+  .crumbs a, .crumbs span { overflow: hidden; text-overflow: ellipsis; }
+  header.top { padding-top: 24px; }
+  h1 { font-size: 23px; }
+  .stat { flex-basis: 50%; border-top: 1px solid var(--rule); }
+  .row { flex-wrap: wrap; padding: 10px 16px; row-gap: 6px; }
+  .row .path { flex-basis: calc(100% - 110px); }
+  .row .stat-line { margin-left: 102px; flex-wrap: wrap; white-space: normal; }
+  .row::after { display: none; }
+  .sec-head, .toolbar { padding-left: 16px; padding-right: 16px; }
+  .card > table.grid { width: calc(100% - 32px); margin: 0 16px 6px; }
+  .card > .scroll { padding: 0 16px 6px; }
+  table.grid td.label { width: auto; white-space: normal; }
+}
 @media (prefers-reduced-motion: reduce) {
-  body, .sheet, .scrim, .row::after { transition: none; }
+  body, .sheet, .scrim, .row::after, .row, .switch .track, .switch .track::after { transition: none; }
 }
 /* On paper there is no clicking, so every diff is printed under its own row and
    the chrome that only answers a pointer is left out. */
 @media print {
-  .toolbar, .scrim, .sheet-nav, .grip { display: none !important; }
+  body { background: #fff; }
+  .toolbar, .scrim, .sheet-nav, .grip, .topbar { display: none !important; }
+  .card, .stats, .stamp { box-shadow: none; }
   .sheet { position: static; transform: none; visibility: visible; width: auto;
     border-left: 0; box-shadow: none; }
   body.sheet-open { padding-right: 0; overflow: visible; }
@@ -624,6 +761,47 @@ def _row_code(row: _Row, lang: str, old: _Painted, new: _Painted) -> str:
     return highlight(row.text, lang)
 
 
+def _split_path(path: str) -> str:
+    """A path with its directory set quieter than its name: ``helpers/`` dim, ``db.py`` not.
+
+    The name is what a reader scanning the list is looking for; the directory
+    is context. A path with no directory is just its escaped self.
+    """
+    folder, slash, name = path.rpartition("/")
+    if not slash:
+        return _esc(path)
+    return f'<span class="dir">{_esc(folder)}/</span>{_esc(name)}'
+
+
+#: How many squares the diffstat bar draws, split between added and removed.
+BAR_CELLS = 5
+
+
+def _bar(added: int, removed: int) -> str:
+    """Five squares showing how a file's changed lines split: ``+9 −2`` → ■■■■□.
+
+    Green for added, red for removed, grey for the rest, the way a code host
+    draws it. A change of a few lines fills only as many squares as it has
+    lines, so a one-line tweak does not look as heavy as a rewrite. Empty when
+    no lines were counted — a binary or skipped file has nothing to split.
+    """
+    total = added + removed
+    if total <= 0:
+        return ""
+    filled = min(BAR_CELLS, total)
+    adds = round(filled * added / total)
+    # Either side that moved at all keeps at least one square, or a 40:1
+    # change would hide its one removal entirely.
+    if removed and adds == filled:
+        adds -= 1
+    if added and adds == 0:
+        adds = 1
+    dels = filled - adds
+    cells = "a" * adds + "d" * dels + "n" * (BAR_CELLS - filled)
+    return '<span class="bar" aria-hidden="true">' + "".join(
+        f'<i class="{c}"></i>' for c in cells) + "</span>"
+
+
 def _file_block(
     *,
     path_key: str,
@@ -678,7 +856,7 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
     # A rename is one file, not two. Written out in full twice, the two paths
     # are near-identical and the reader has to diff 90 characters by eye to
     # find the part that moved; so only that part is written twice.
-    title = _esc(change.path)
+    title = _split_path(change.path)
     if change.kind == "renamed" and change.old_path:
         head, was, now, tail = rename_label(change.old_path, change.path)
         title = (
@@ -690,6 +868,7 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
         stat += f'<span class="add">+{change.added_lines}</span>'
     if change.removed_lines:
         stat += f'<span class="del">−{change.removed_lines}</span>'
+    stat += _bar(change.added_lines, change.removed_lines)
     if change.size_delta:
         stat += f"<span>{signed(change.size_delta)} B</span>"
     if note := change.line_count_note:
@@ -834,6 +1013,7 @@ def _render_move(group: MoveGroup) -> str:
         stat += f'<span class="add">+{group.added_lines}</span>'
     if group.removed_lines:
         stat += f'<span class="del">−{group.removed_lines}</span>'
+    stat += _bar(group.added_lines, group.removed_lines)
     if group.size_delta:
         stat += f"<span>{signed(group.size_delta)} B</span>"
 
@@ -912,49 +1092,76 @@ def _stats(diff: VersionDiff) -> str:
         beside = f'<span class="delta">{_esc(delta)}</span>' if delta else ""
         after = f' <span class="hint">{_esc(hint)}</span>' if hint else ""
         title = f' title="{_esc(tip)}"' if tip else ""
+        # New findings are the one number on the rail that asks for action.
+        css = "stat alert" if label == "new findings" else "stat"
         cells.append(
-            f'<div class="stat"{title}><div class="v">{value}{beside}</div>'
+            f'<div class="{css}"{title}><div class="v">{value}{beside}</div>'
             f'<div class="k">{_esc(label)}{after}</div></div>'
         )
     return f'<div class="stats">{"".join(cells)}</div>'
 
 
+def _section(title: str, body: str, *, count: int | None = None, tone: str = "",
+             aside: str = "") -> str:
+    """One titled card: a heading, an optional count beside it, and the body under it.
+
+    ``tone`` is ``warn`` or ``danger`` for a section that asks the reader to do
+    something before deploying; it tints the heading so a scroll lands there
+    first. ``aside`` is already-escaped markup set at the heading's far end.
+    """
+    dot = '<span class="dot"></span>' if tone else ""
+    badge = f'<span class="count">{count:,}</span>' if count is not None else ""
+    side = f'<span class="aside">{aside}</span>' if aside else ""
+    css = f"card {tone}" if tone else "card"
+    return (f'<section class="{css}"><div class="sec-head">{dot}<h2>{_esc(title)}</h2>'
+            f"{badge}{side}</div>{body}</section>")
+
+
 def _dep_table(diff: VersionDiff) -> str:
     """Render the dependency table, or an empty string when nothing moved.
 
-    Each row shows the package, the versions on both sides, and whether the fact
-    came from a manifest (``declared``) or from what was vendored in the zip
-    (``installed``).
+    Each row shows the package, the move between versions as one phrase
+    (``1.34.0 → 1.35.20``, or just ``2.9.0`` for a newcomer), and whether the
+    fact came from a manifest (``declared``) or from what was vendored in the
+    zip (``installed``).
     """
     if not diff.deps:
         return ""
     rows = []
     for change in diff.deps:
+        old, new = change.old_version, change.new_version
+        if old and new:
+            move = (f'<span class="del">{_esc(old)}</span><span class="arrow">→</span>'
+                    f'<span class="add">{_esc(new)}</span>')
+        elif new:
+            move = f'<span class="add">{_esc(new)}</span>'
+        else:
+            move = f'<span class="del">{_esc(old or "—")}</span>'
         rows.append(
             "<tr>"
             f'<td><span class="chip {_esc(change.kind)}">{_esc(change.kind)}</span></td>'
-            f'<td class="mono">{_esc(change.name)}</td>'
-            f'<td class="mono del">{_esc(change.old_version or "—")}</td>'
-            f'<td class="mono add">{_esc(change.new_version or "—")}</td>'
-            f"<td>{_esc(change.manager)}</td>"
-            f'<td>{"declared" if change.is_declared else "installed"}</td>'
+            f'<td class="mono"><strong>{_esc(change.name)}</strong></td>'
+            f'<td class="mono">{move}</td>'
+            f'<td class="dim">{_esc(change.manager)} · '
+            f'{"declared" if change.is_declared else "installed"}</td>'
             "</tr>"
         )
-    return (
-        "<h2>Dependencies</h2><div class='scroll'><table class='grid'>"
-        "<thead><tr><th></th><th>package</th><th>from</th><th>to</th>"
-        "<th>manager</th><th>origin</th></tr></thead>"
+    table = (
+        "<div class='scroll'><table class='grid'>"
+        "<thead><tr><th>change</th><th>package</th><th>version</th><th>source</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
+    return _section("Dependencies", table, count=len(diff.deps))
 
 
 def _context_section(diff: VersionDiff) -> str:
-    """Render the environment variables and AWS services that came and went.
+    """Render the environment variables, AWS services and entry point that moved.
 
-    Empty string when neither changed, so the section disappears rather than
-    appearing empty.
+    These are the changes a file diff makes look harmless and a deploy makes
+    expensive, so they share one tinted card titled for what the reader has to
+    do about them. Empty string when none changed, so the card disappears
+    rather than appearing empty.
     """
-    blocks: list[str] = []
 
     def listing(label: str, values: list[str], css: str, hint: str = "") -> str:
         """One labelled row of identifiers, or an empty string when there are none.
@@ -964,52 +1171,46 @@ def _context_section(diff: VersionDiff) -> str:
         """
         if not values:
             return ""
-        chips = " ".join(f'<span class="tok {css}">{_esc(v)}</span>' for v in values)
-        hint_html = f'<div class="sub" style="margin-top:6px">{_esc(hint)}</div>' if hint else ""
+        chips = "".join(f'<span class="tok {css}">{_esc(v)}</span>' for v in values)
+        hint_html = f'<div class="sub">{_esc(hint)}</div>' if hint else ""
         return f"<tr><td class='label'>{_esc(label)}</td><td>{chips}{hint_html}</td></tr>"
 
-    rows = "".join(
-        [
-            listing(
-                "Environment variables added", diff.env_added, "added",
-                "These must exist in the function's environment configuration before you deploy.",
-            ),
-            listing("Environment variables removed", diff.env_removed, "removed"),
-            listing(
-                "AWS services added", diff.services_added, "added",
-                "The execution role may need new IAM permissions.",
-            ),
-            listing("AWS services removed", diff.services_removed, "removed"),
-        ]
-    )
-    if rows:
-        blocks.append(
-            f"<h2>Configuration impact</h2><table class='grid'><tbody>{rows}</tbody></table>"
-        )
+    def moved(label: str, before: str | None, after: str | None) -> str:
+        """One labelled ``old → new`` row for the runtime or the handler."""
+        return (f"<tr><td class='label'>{_esc(label)}</td><td class='mono'>"
+                f"<span class='del'>{_esc(before or '?')}</span><span class='arrow'>→</span>"
+                f"<span class='add'>{_esc(after or '?')}</span></td></tr>")
 
-    if diff.runtime_change or diff.handler_change:
-        entries = []
-        if diff.runtime_change:
-            entries.append(
-                f"<tr><td class='label'>Runtime</td><td class='mono'>"
-                f"{_esc(diff.runtime_change[0])} → {_esc(diff.runtime_change[1])}</td></tr>"
-            )
-        if diff.handler_change:
-            before, after = diff.handler_change
-            entries.append(
-                f"<tr><td class='label'>Handler</td><td class='mono'>"
-                f"{_esc(before or '?')} → {_esc(after or '?')}</td></tr>"
-            )
-        blocks.append(f"<h2>Entry point</h2><table class='grid'><tbody>{''.join(entries)}</tbody></table>")
-
-    return "".join(blocks)
+    rows = [
+        listing(
+            "Environment variables added", diff.env_added, "added",
+            "These must exist in the function's environment configuration before you deploy.",
+        ),
+        listing("Environment variables removed", diff.env_removed, "removed"),
+        listing(
+            "AWS services added", diff.services_added, "added",
+            "The execution role may need new IAM permissions.",
+        ),
+        listing("AWS services removed", diff.services_removed, "removed"),
+    ]
+    if diff.runtime_change:
+        rows.append(moved("Runtime", *diff.runtime_change))
+    if diff.handler_change:
+        rows.append(moved("Handler", *diff.handler_change))
+    body = "".join(rows)
+    if not body:
+        return ""
+    return _section("Before you deploy", f"<table class='grid'><tbody>{body}</tbody></table>",
+                    tone="warn", aside="configuration impact")
 
 
 def _findings_section(diff: VersionDiff) -> str:
     """Render new and resolved security findings, or an empty string when there are none.
 
     Details are already redacted by the scanner, so what lands in the page shows
-    the shape of a credential without carrying the credential itself.
+    the shape of a credential without carrying the credential itself. The card
+    is tinted red when any finding is ``high``, amber otherwise, and plain when
+    the only news is findings that went away.
     """
     if not diff.findings_new and not diff.findings_fixed:
         return ""
@@ -1019,12 +1220,12 @@ def _findings_section(diff: VersionDiff) -> str:
             "<tr>"
             f'<td><span class="chip {_esc(finding["severity"])}">{_esc(finding["severity"])}</span></td>'
             f'<td>{_esc(finding["kind"])}</td>'
-            f'<td class="mono">{_esc(finding["path"])}:{_esc(finding["line"])}</td>'
-            f'<td class="mono">{_esc(finding["detail"])}</td>'
+            f'<td class="mono">{_esc(finding["path"])}<span class="dim">:{_esc(finding["line"])}</span></td>'
+            f'<td class="mono dim">{_esc(finding["detail"])}</td>'
             "</tr>"
         )
     resolved = (
-        f'<div class="sub" style="margin-top:8px">{len(diff.findings_fixed)} finding(s) '
+        f'<div class="foot sub">{len(diff.findings_fixed)} finding(s) '
         "present in the older version are gone.</div>"
         if diff.findings_fixed
         else ""
@@ -1035,7 +1236,12 @@ def _findings_section(diff: VersionDiff) -> str:
         if rows
         else ""
     )
-    return f"<h2>New findings</h2>{table}{resolved}"
+    if any(f["severity"] == "high" for f in diff.findings_new):
+        tone = "danger"
+    else:
+        tone = "warn" if diff.findings_new else ""
+    return _section("New findings", f"{table}{resolved}", count=len(diff.findings_new),
+                    tone=tone, aside="values are redacted")
 
 
 #: Without the script the sheet can never open, so the diffs sit under their own
@@ -1092,15 +1298,93 @@ def _sheet(diff: VersionDiff) -> str:
     )
 
 
-def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
+#: The magnifier drawn inside the filter box.
+SEARCH_GLYPH = "M7 12.2a5.2 5.2 0 1 0 0-10.4 5.2 5.2 0 0 0 0 10.4zM10.8 10.8 14 14"
+
+#: A crumb in the top bar: its text, and where it links (None for the page you are on).
+Crumb = tuple[str, str | None]
+
+
+def _stamp_now() -> str:
+    """When the page is being written, to the minute: ``2026-09-23 01:07``."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _page(title: str, body: str, crumbs: list[Crumb], footer: str, *,
+          head: str = "", before: str = "", after: str = "") -> str:
+    """Wrap one page's content in the shell every report page shares.
+
+    All three pages — the archive index, a function's history and a
+    comparison — carry the same top bar, so they read as one site rather than
+    three unrelated printouts: the tool's name on the left, where you are in
+    the archive beside it, and when the page was written on the right.
+
+    A crumb links only when its caller knows the target exists. A comparison
+    written with ``lw diff --output`` can land anywhere on disk, so a link
+    guessed at ``../index.html`` would be a link to nothing. ``footer`` is
+    already-escaped markup; ``head`` goes in ``<head>``, ``before`` at the top
+    of the body (the icon sprite) and ``after`` at the bottom (the sheet and
+    its script).
+    """
+    trail = []
+    for index, (label, href) in enumerate(crumbs):
+        if href:
+            trail.append(f'<a href="{_esc(href)}">{_esc(label)}</a>')
+        elif index == len(crumbs) - 1:
+            trail.append(f'<span class="here">{_esc(label)}</span>')
+        else:
+            trail.append(f"<span>{_esc(label)}</span>")
+    path = '<span class="sep">/</span>'.join(trail)
+    crumb_bar = f'<span class="sep">/</span><div class="crumbs">{path}</div>' if trail else ""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(title)}</title>
+<style>{CSS}{ICON_CSS}</style>
+{head}
+</head>
+<body>
+{before}
+<nav class="topbar"><div class="inner">
+  <span class="brand"><span class="logo" aria-hidden="true">λ</span><span class="name">lambda-watcher</span></span>
+  {crumb_bar}
+  <span class="when">Generated {_esc(_stamp_now())}</span>
+</div></nav>
+<div class="wrap">
+{body}
+  <footer>{footer}</footer>
+</div>
+{after}
+</body>
+</html>
+"""
+
+
+def render_html(
+    diff: VersionDiff,
+    generated_by: str = "lambda-watcher",
+    *,
+    archive_href: str | None = None,
+    history_href: str | None = None,
+) -> str:
     """Render the full report as a single HTML document.
 
-    What the reader gets is a summary they can take in without scrolling, then
-    a list of every changed file. Clicking one opens its diff in the sheet
-    beside the list rather than underneath it — see :func:`_sheet` — so the
-    list keeps its place and the code gets the width it wants.
+    What the reader gets is a summary they can take in without scrolling —
+    the two versions, the numbers, then anything that needs doing before a
+    deploy — and a list of every changed file under it. Clicking one opens its
+    diff in the sheet beside the list rather than underneath it — see
+    :func:`_sheet` — so the list keeps its place and the code gets the width
+    it wants.
+
+    ``archive_href`` and ``history_href`` point the top bar at the archive's
+    front page and this function's history, relative to where the page is
+    being written. Callers pass them only where they know those pages sit;
+    left out, the crumbs are plain text.
     """
-    title = f"{diff.function_name} · v{diff.a_seq:04d} → v{diff.b_seq:04d}"
+    versions = f"v{diff.a_seq:04d} → v{diff.b_seq:04d}"
+    title = f"{diff.function_name} · {versions}"
     a_when = format_ts(diff.a_meta.get("ingested_at"))
     b_when = format_ts(diff.b_meta.get("ingested_at"))
 
@@ -1116,75 +1400,82 @@ def render_html(diff: VersionDiff, generated_by: str = "lambda-watcher") -> str:
             _render_file(c, diff.a_root, diff.b_root) for c in row.edited_members
         )
     vendor_toggle = (
-        '<label><input type="checkbox" id="vendor" checked> show vendored files</label>'
+        '<label class="switch"><input type="checkbox" id="vendor" checked>'
+        '<span class="track"></span>Show vendored files</label>'
         if any(c.is_vendor for c in diff.files)
         else ""
     )
     # Two versions with the same tree have nothing to filter and nothing to
     # open, so that page is one sentence: a search box above it would only
     # offer to narrow an empty list.
-    toolbar = listing = ""
     if diff.files:
         toolbar = (
             '<div class="toolbar">'
-            '<input type="search" id="filter" placeholder="Filter by path…" autocomplete="off">'
+            '<label class="search"><svg viewBox="0 0 16 16" aria-hidden="true">'
+            f'<path d="{SEARCH_GLYPH}"/></svg>'
+            '<input type="search" id="filter" placeholder="Filter by path…" autocomplete="off"'
+            ' aria-label="Filter files by path"></label>'
             f'{vendor_toggle}<span class="sub" id="shown-count"></span></div>'
         )
         listing = '<div class="files">{}</div>'.format("\n".join(blocks))
+        files = _section("File changes", toolbar + listing, count=sum(diff.counts().values()),
+                         aside="click a file to open its diff")
     else:
-        listing = '<div class="empty">No file-level changes between these versions.</div>'
+        files = ('<div class="empty"><span class="big">No file-level changes '
+                 "between these versions.</span></div>")
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_esc(title)}</title>
-<style>{CSS}{ICON_CSS}</style>
-<noscript><style>{NOSCRIPT}</style></noscript>
-</head>
-<body>
-{icons.sprite()}
-<div class="wrap">
-  <header class="top">
+    body = f"""  <header class="top">
+    <div class="eyebrow">Version comparison</div>
     <h1>{_esc(diff.function_name)}
       <span class="ver">v{diff.a_seq:04d}<span class="arrow">→</span>v{diff.b_seq:04d}</span></h1>
-    <div class="sub">
-      {_esc(diff.headline())} · v{diff.a_seq:04d} archived {_esc(a_when)},
-      v{diff.b_seq:04d} archived {_esc(b_when)}
+    <div class="lead">{_esc(diff.headline().capitalize())}</div>
+    <div class="stamps">
+      <span class="stamp"><b>v{diff.a_seq:04d}</b>archived {_esc(a_when)}</span>
+      <span class="to" aria-hidden="true">→</span>
+      <span class="stamp"><b>v{diff.b_seq:04d}</b>archived {_esc(b_when)}</span>
     </div>
   </header>
 
   {_stats(diff)}
-  {_dep_table(diff)}
-  {_context_section(diff)}
   {_findings_section(diff)}
+  {_context_section(diff)}
+  {_dep_table(diff)}
+  {files}"""
+    crumbs: list[Crumb] = [
+        ("All functions", archive_href), (diff.function_name, history_href), (versions, None),
+    ]
+    footer = (
+        f"Generated by {_esc(generated_by)} on {_esc(_stamp_now())}. Content hashes ignore zip "
+        "timestamps, so re-downloading unchanged code does not create a new version."
+    )
+    return _page(
+        title, body, crumbs, footer,
+        head=f"<noscript><style>{NOSCRIPT}</style></noscript>",
+        before=icons.sprite(),
+        after=f"{_sheet(diff)}\n<script>{JS}</script>",
+    )
 
-  <h2>File changes</h2>
-  {toolbar}
-  {listing}
 
-  <footer>
-    Generated by {_esc(generated_by)} on {_esc(datetime.now().strftime('%Y-%m-%d %H:%M'))}.
-    Content hashes ignore zip timestamps, so re-downloading unchanged code does not create a new version.
-  </footer>
-</div>
-{_sheet(diff)}
-<script>{JS}</script>
-</body>
-</html>
-"""
-
-
-def write_html(diff: VersionDiff, path: Path, generated_by: str = "lambda-watcher") -> Path:
+def write_html(
+    diff: VersionDiff,
+    path: Path,
+    generated_by: str = "lambda-watcher",
+    *,
+    archive_href: str | None = None,
+    history_href: str | None = None,
+) -> Path:
     """Render the diff and write it to ``path``, creating parent directories.
 
     Returns the path so callers can print it. This is what the background
     ingest calls to leave ``reports/<function>/latest.html`` sitting there
-    before anyone thinks to ask what changed.
+    before anyone thinks to ask what changed. The two hrefs are passed straight
+    to :func:`render_html`, relative to ``path``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_html(diff, generated_by), encoding="utf-8")
+    path.write_text(
+        render_html(diff, generated_by, archive_href=archive_href, history_href=history_href),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -1192,11 +1483,15 @@ def render_timeline(
     function_name: str,
     versions: list[dict[str, Any]],
     generated_by: str = "lambda-watcher",
+    *,
+    archive_href: str | None = None,
 ) -> str:
     """Index page: every archived version of one function, newest first.
 
     ``versions`` entries carry the per-version stats plus ``diff_href`` /
     ``diff_summary`` describing the step from the previous version.
+    ``archive_href`` links the top bar back to the archive's front page, when
+    the caller knows where that is.
     """
     rows: list[str] = []
     for entry in versions:
@@ -1205,9 +1500,10 @@ def render_timeline(
         step = (
             f'<a href="{_esc(href)}">{_esc(entry.get("diff_summary") or "view diff")}</a>'
             if href
-            else '<span class="sub">first version</span>'
+            else '<span class="dim">first version</span>'
         )
-        label = f' <span class="chip">{_esc(entry["label"])}</span>' if entry.get("label") else ""
+        label = (f' <span class="chip label">{_esc(entry["label"])}</span>'
+                 if entry.get("label") else "")
         rows.append(
             "<tr>"
             f'<td class="mono"><strong>v{seq:04d}</strong>{label}</td>'
@@ -1216,38 +1512,29 @@ def render_timeline(
             f'<td class="mono">{_esc(entry.get("handler") or "?")}</td>'
             f'<td class="num">{entry.get("file_count", 0):,}</td>'
             f'<td class="num">{_esc(human_size(entry.get("total_size", 0)))}</td>'
-            f'<td class="mono sub">{_esc(str(entry.get("source_name") or ""))}</td>'
+            f'<td class="mono dim">{_esc(str(entry.get("source_name") or ""))}</td>'
             f"<td>{step}</td>"
             "</tr>"
         )
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_esc(function_name)} · version history</title>
-<style>{CSS}</style>
-</head>
-<body>
-<div class="wrap">
-  <header class="top">
-    <h1>{_esc(function_name)}</h1>
-    <div class="sub">{len(versions)} archived version(s) · newest first</div>
-  </header>
-  <div class="scroll"><table class="grid">
+    count = len(versions)
+    table = f"""<div class="scroll"><table class="grid">
     <thead><tr>
       <th>version</th><th>archived</th><th>runtime</th><th>handler</th>
       <th class="num">files</th><th class="num">size</th>
       <th>downloaded as</th><th>change from previous</th>
     </tr></thead>
     <tbody>{''.join(rows)}</tbody>
-  </table></div>
-  <footer>Generated by {_esc(generated_by)} on {_esc(datetime.now().strftime('%Y-%m-%d %H:%M'))}.</footer>
-</div>
-</body>
-</html>
-"""
+  </table></div>"""
+    body = f"""  <header class="top">
+    <div class="eyebrow">Version history</div>
+    <h1>{_esc(function_name)}</h1>
+    <div class="lead">{count} archived version{'s' if count != 1 else ''} · newest first</div>
+  </header>
+  {_section("Versions", table, count=count)}"""
+    crumbs: list[Crumb] = [("All functions", archive_href), (function_name, None)]
+    footer = f"Generated by {_esc(generated_by)} on {_esc(_stamp_now())}."
+    return _page(f"{function_name} · version history", body, crumbs, footer)
 
 
 def render_archive_index(
@@ -1272,25 +1559,28 @@ def render_archive_index(
     rows: list[str] = []
     for entry in functions:
         name = entry["name"]
-        label = f' <span class="chip">{_esc(entry["label"])}</span>' if entry.get("label") else ""
+        label = (f' <span class="chip label">{_esc(entry["label"])}</span>'
+                 if entry.get("label") else "")
         secrets = " ".join(
             f'<span class="chip {_esc(severity)}">{count} {_esc(severity)}</span>'
             for severity, count in entry["secrets"].items()
-        ) or '<span class="sub">none</span>'
+        ) or '<span class="dim">none</span>'
         if entry.get("change_href"):
             change = (f'<a href="{_esc(entry["change_href"])}">'
                       f'v{entry["previous_seq"]:04d} → v{entry["seq"]:04d}</a>')
         elif entry.get("previous_seq") is None:
-            change = '<span class="sub">first version</span>'
+            change = '<span class="dim">first version</span>'
         else:
             # Versions archived with automatic reports switched off, or before
             # there were any: the comparison exists only once someone asks.
-            change = f'<span class="sub">not written yet: <span class="mono">lw report "{_esc(name)}"</span></span>'
+            change = (f'<span class="dim">not written yet:</span> '
+                      f'<span class="cmd">lw report "{_esc(name)}"</span>')
         if entry.get("history_href"):
-            change += f' <span class="sub">·</span> <a href="{_esc(entry["history_href"])}">full history</a>'
+            change += (f' <span class="dim">·</span> '
+                       f'<a href="{_esc(entry["history_href"])}">full history</a>')
         rows.append(
             "<tr>"
-            f"<td><strong>{_esc(name)}</strong></td>"
+            f'<td><span class="fn-name">{_esc(name)}</span></td>'
             f'<td class="num">{entry["versions"]:,}</td>'
             f'<td class="mono">v{entry["seq"]:04d}{label}</td>'
             f'<td>{_esc(format_ts(entry.get("ingested_at")))}</td>'
@@ -1302,10 +1592,20 @@ def render_archive_index(
 
     version_total = sum(int(entry["versions"]) for entry in functions)
     if rows:
-        summary = (f"{len(functions)} function{'s' if len(functions) != 1 else ''} · "
-                   f"{version_total:,} version{'s' if version_total != 1 else ''} · "
-                   "most recently archived first")
-        body = f"""<div class="scroll"><table class="grid">
+        lead = "Every function archived so far, most recently archived first."
+        leaking = sum(1 for entry in functions if entry["secrets"])
+        # The same rail the comparison page opens with, so the front page
+        # answers "how much is in here" before the reader scans a table.
+        cells = [
+            (f"{len(functions):,}", "functions", ""),
+            (f"{version_total:,}", "versions archived", ""),
+            (f"{leaking:,}", "ship a secret", " alert" if leaking else ""),
+        ]
+        stats = '<div class="stats">' + "".join(
+            f'<div class="stat{css}"><div class="v">{value}</div><div class="k">{label}</div></div>'
+            for value, label, css in cells
+        ) + "</div>"
+        table = f"""<div class="scroll"><table class="grid">
     <thead><tr>
       <th>function</th><th class="num">versions</th><th>latest</th><th>archived</th>
       <th>runtime</th><th title="In first-party code, in the latest version">secrets</th>
@@ -1313,33 +1613,22 @@ def render_archive_index(
     </tr></thead>
     <tbody>{''.join(rows)}</tbody>
   </table></div>"""
+        content = stats + _section("Functions", table, count=len(functions))
     else:
-        summary = "nothing archived yet"
-        body = ('<div class="empty">Nothing is archived yet. '
-                '<span class="mono">lw setup</span> watches your downloads folder from now on.</div>')
+        lead = "Every function lambda-watcher archives will be listed here."
+        content = ('<div class="empty"><span class="big">Nothing is archived yet.</span>'
+                   '<span class="cmd">lw setup</span> watches your downloads folder from now on.'
+                   "</div>")
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lambda archive · every function</title>
-<style>{CSS}</style>
-</head>
-<body>
-<div class="wrap">
-  <header class="top">
+    body = f"""  <header class="top">
+    <div class="eyebrow">Archive</div>
     <h1>Lambda archive</h1>
-    <div class="sub">{summary}</div>
+    <div class="lead">{lead}</div>
   </header>
-  {body}
-  <footer>
-    Generated by {_esc(generated_by)} on {_esc(datetime.now().strftime('%Y-%m-%d %H:%M'))},
-    and rewritten each time a version is archived. <span class="mono">lw report</span>
-    rewrites it by hand; <span class="mono">lw report "&lt;function&gt;"</span> writes
-    that function's full history.
-  </footer>
-</div>
-</body>
-</html>
-"""
+  {content}"""
+    footer = (
+        f"Generated by {_esc(generated_by)} on {_esc(_stamp_now())}, and rewritten each time a "
+        'version is archived. <span class="cmd">lw report</span> rewrites it by hand; '
+        '<span class="cmd">lw report "&lt;function&gt;"</span> writes that function\'s full history.'
+    )
+    return _page("Lambda archive · every function", body, [("All functions", None)], footer)
