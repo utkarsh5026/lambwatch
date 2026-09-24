@@ -193,12 +193,7 @@ def test_the_noise_the_docs_promise_is_the_noise_that_exists(captures: set[str])
 
 def test_site_command_reference_only_lists_real_commands() -> None:
     """Every `lw <cmd>` the site advertises is a command the CLI actually has."""
-    from lambda_watcher.cli import app
-
-    # `callback` is Optional on Typer's CommandInfo; a registered command always
-    # has one, and a name no `lw <cmd>` can match is the harmless way to say so.
-    real = {c.name or (c.callback.__name__ if c.callback else "?")
-            for c in app.registered_commands}
+    real = _registered_commands()
     markup = SITE.read_text(encoding="utf-8")
     reference = re.search(r'<div class="cmdlist">.*?\n    </div>', markup, re.S)
     assert reference, "the command reference has moved"
@@ -225,10 +220,13 @@ def test_every_command_reference_entry_shows_its_output() -> None:
 
 
 def _registered_commands() -> set[str]:
-    """Every command name the CLI actually registers."""
+    """Every command name the CLI actually registers, command groups (``lw ai``) included."""
     from lambda_watcher.cli import app
 
-    return {c.name or (c.callback.__name__ if c.callback else "?") for c in app.registered_commands}
+    # `callback` is Optional on Typer's CommandInfo; a registered command always
+    # has one, and a name no `lw <cmd>` can match is the harmless way to say so.
+    names = {c.name or (c.callback.__name__ if c.callback else "?") for c in app.registered_commands}
+    return names | {g.name for g in app.registered_groups if isinstance(g.name, str)}
 
 
 def test_every_command_is_named_in_the_site_reference() -> None:

@@ -159,6 +159,11 @@ report:
   auto_diff: true
   include_vendor: false
 
+# AI explanations of each change are not set up in this file: `lw ai add` walks
+# you through it, and `lw ai settings` chooses when they run and what is sent.
+# They keep API keys in ai.json beside the archive, readable only by you, so
+# this file stays safe to paste into a bug report.
+
 # What `lw open` launches on a folder. Left empty, it looks for VS Code and
 # friends on PATH. $LAMBDA_WATCHER_EDITOR overrides this.
 editor: ""

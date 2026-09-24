@@ -28,6 +28,11 @@ from lambda_watcher.demo import fake_secret, stage_downloads
 
 REPO = Path(__file__).resolve().parents[2]
 
+#: Environment variables `lw explain` would pick a model up from; see `Runner`.
+AI_KEY_VARIABLES = frozenset({
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT",
+})
+
 
 # --------------------------------------------------------------------------- #
 # Driving the real CLI
@@ -37,8 +42,12 @@ class Runner:
         self.home = home                       # stands in as the user's home directory
         self.archive = home / ".lambda-watcher"
         self.downloads = downloads
+        # A key the person running this happens to have exported would change
+        # what `lw ai` and `lw explain` print, and would let a capture reach a
+        # real AI service. The captures document a machine with nothing set up.
+        ambient = {k: v for k, v in os.environ.items() if k not in AI_KEY_VARIABLES}
         self.env = {
-            **os.environ,
+            **ambient,
             # Point HOME at the demo directory rather than rewriting paths in
             # the output afterwards: the tool renders `~/...` itself, and Rich's
             # column widths stay the ones it actually computed.
@@ -281,6 +290,15 @@ def main() -> int:
             wide.run("export", "order-processor", "1", "-o", str(home / "rollback.zip")))
     capture("report", "lambda-watcher report order-processor",
             wide.run("report", "order-processor"))
+
+    # ---- explaining a change ------------------------------------------------
+    # Only what can be captured without a real AI service: the setup screen as
+    # it looks before a model is added, and the exact request `lw explain`
+    # would send. A model's answer differs on every run, so it is described on
+    # the page rather than quoted.
+    capture("ai", "lambda-watcher ai", cli.run("ai"))
+    capture("explain", "lambda-watcher explain order-processor --dry-run",
+            cli.run("explain", "order-processor", "--dry-run"))
 
     # ---- housekeeping, last because these change the archive -----------------
     capture("label", 'lambda-watcher label order-processor 2 "prod deploy 2026-03-01"',

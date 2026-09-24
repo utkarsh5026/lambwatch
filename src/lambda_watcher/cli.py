@@ -19,11 +19,18 @@ from typing import Any, NoReturn, Optional
 import typer
 import yaml
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from . import __version__
 from . import heartbeat
-from .helptext import FUNCTION_HELP, LATEST_VERSION_HELP, VERSION_HELP, for_command
+from .ai.explanation import Explanation, clear_pending, load_record, save_done, save_failed, save_pending
+from .ai.prompt import SYSTEM_PROMPT, build_prompt
+from .ai.providers import AIError, list_models, normalize_local_url, parse_azure_endpoint, ping
+from .ai.report import explain_command, headline_for, panel_for, shell_word
+from .ai.run import Explainer, ExplainJob, explain_diff, rewrite_pages
+from .ai.settings import PROVIDERS, AISettings, ModelEntry, SettingsError, provider_key
+from .helptext import FUNCTION_HELP, LATEST_VERSION_HELP, VERSION_HELP, for_command, for_group
 from .config import (
     Config, default_config_path, default_download_dirs, load_config, on_wsl, unknown_keys,
     windows_home_on_wsl,
@@ -32,6 +39,7 @@ from .db import Database
 from .diffing import code_dir, diff_from_index, write_archive_index
 from .diffing.render_html import render_timeline, write_html
 from .diffing.render_text import render as render_diff
+from .diffing.render_text import render_explanation
 from .gitmirror import diff as mirror_diff
 from .gitmirror import git_available, has_tag
 from .gitmirror import passthrough as git_passthrough
@@ -189,6 +197,28 @@ def _resolve_seq(db: Database, function_id: int, spec: str | int | None, default
     if value not in seqs:
         _fail(f"version {value} not found (have: {', '.join(str(s) for s in seqs)})")
     return value
+
+
+def _resolve_pair(db: Database, function_id: int, from_: str | None, to: str | None) -> tuple[int, int]:
+    """The two versions ``--from`` and ``--to`` name, oldest first: by default the last two.
+
+    Shared by ``diff`` and ``explain``, so the two commands can never disagree
+    about which comparison ``lw diff orders --to 7`` and ``lw explain orders
+    --to 7`` mean. Given the wrong way round, the pair is swapped rather than
+    refused — which version is older is not in doubt.
+    """
+    b_seq = _resolve_seq(db, function_id, to, default_offset=0)
+    if from_ is None:
+        available = [int(v["seq"]) for v in db.list_versions(function_id) if int(v["seq"]) < b_seq]
+        if not available:
+            _fail(f"v{b_seq:04d} is the oldest archived version; nothing to compare it against")
+        a_seq = max(available)
+    else:
+        a_seq = _resolve_seq(db, function_id, from_, default_offset=1)
+
+    if a_seq == b_seq:
+        _fail("--from and --to are the same version")
+    return (b_seq, a_seq) if a_seq > b_seq else (a_seq, b_seq)
 
 
 def _version_or_fail(db: Database, function_id: int, seq: int):
@@ -493,6 +523,7 @@ def _print_status() -> None:
         )
     else:
         console.print(f"    [dim]nothing archived yet · {_home_relative(cfg.root)}[/dim]")
+    console.print(_ai_status_line(cfg))
 
     rows = db.list_functions()[:5]
     if rows:
@@ -531,6 +562,27 @@ def _print_status() -> None:
     width = max((len(command) for command, _ in steps), default=0)
     for command, blurb in steps:
         console.print(f"  [bold]{command:<{width}}[/bold]   [dim]{blurb}[/dim]")
+
+
+def _ai_status_line(cfg: Config) -> str:
+    """The dashboard's one line about AI: which model explains changes, and whether on its own.
+
+    Present in every state, because bare ``lw`` is where people find out what
+    the tool can do: "not set up · lw ai add" is how someone learns the
+    feature exists, and "off · lw ai on" is how someone who switched it off
+    remembers they did. A default model without a key is the one state worth
+    colour, since it means explanations are silently not being written.
+    """
+    settings = AISettings.load(cfg.root)
+    if not settings.enabled:
+        return "    [dim]✦ AI explanations off · lw ai on[/dim]"
+    entry = settings.default_entry()
+    if entry is None:
+        return "    [dim]✦ AI explanations not set up · lw ai add[/dim]"
+    if entry.key_problem():
+        return f"    [yellow]! AI model {escape(entry.name)} has no key · lw ai[/yellow]"
+    how = "for every new version" if settings.auto_explain else "when you run lw explain"
+    return f"    [dim]✦ AI explanations by {escape(entry.name)}, {how}[/dim]"
 
 
 def _next_steps(
@@ -884,6 +936,7 @@ def demo(
 
     db = _open_db(demo_cfg)
     ingestor = Ingestor(demo_cfg, db)
+    ingestor.ai_in_reports = False
     for path in sample.stage_downloads(demo_root / "Downloads"):
         _print_ingest_result(ingestor.ingest(path, just_downloaded=False))
 
@@ -1042,6 +1095,8 @@ def doctor() -> None:
         "" if git_available() else "install git, or set git_mirror.enabled: false",
     ))
 
+    rows.append(_ai_doctor_row(cfg))
+
     try:
         db = _open_db(cfg)
         functions = db.list_functions()
@@ -1089,6 +1144,32 @@ def doctor() -> None:
         raise typer.Exit(1)
 
 
+def _ai_doctor_row(cfg: Config) -> tuple[str, str, str, str]:
+    """``lw doctor``'s row about AI. Only a broken setup counts as a problem.
+
+    Not having AI set up is a choice, not a fault, so it is reported in yellow
+    and never fails the checkup. A settings file that cannot be read, or a
+    default model with no key, *is* a fault — explanations would silently
+    stop — so those are upper-case and make ``doctor`` exit 1. The check never
+    makes a request: whether a key works is ``lw ai test``'s question, asked
+    only when someone asks it.
+    """
+    settings = AISettings.load(cfg.root)
+    if settings.problem:
+        return ("ai", "UNREADABLE", _home_relative(settings.path or cfg.root / "ai.json"),
+                "lw ai add writes a fresh one and keeps the old file")
+    if not settings.enabled:
+        return ("ai", "off", "switched off with lw ai off", "lw ai on")
+    entry = settings.default_entry()
+    if entry is None:
+        return ("ai", "not set up", "optional — explains each change in plain English", "lw ai add")
+    if entry.key_problem():
+        return ("ai", "NO KEY", f"{entry.name} has no API key here",
+                f"lw ai add {entry.provider} --name {entry.name}")
+    how = "every new version" if settings.auto_explain else "on request"
+    return ("ai", "ok", f"{entry.label}, {how}", "lw ai test checks it answers")
+
+
 # ------------------------------------------------------------------ watch
 def _print_ingest_result(result: IngestResult) -> None:
     """One line per archived download, colour-coded by what became of it.
@@ -1122,6 +1203,47 @@ def _print_ingest_result(result: IngestResult) -> None:
         )
 
 
+def _print_explained(job: ExplainJob, explanation: Explanation | None, error: AIError | None) -> None:
+    """One line for an explanation the background worker finished, lined up under the ingest lines.
+
+    Called on the explainer's thread as each answer lands, so a terminal
+    running ``lw watch`` shows the headline a few seconds after the version
+    it explains — or, when it failed, why and the command that tries again.
+    """
+    diff = job.diff
+    label = f"{diff.function_name} v{diff.b_seq:04d}"
+    if explanation is not None:
+        risk = f"  ({explanation.risk} risk)" if explanation.risk else ""
+        console.print(f"[magenta]{'explained':>18}[/magenta]  {escape(label)}  "
+                      f"[dim]{escape(explanation.headline or explanation.summary[:120])}{risk}[/dim]")
+    elif error is not None:
+        command = explain_command(diff.function_name, diff.a_seq, diff.b_seq)
+        console.print(f"[yellow]{'not explained':>18}[/yellow]  {escape(label)}  "
+                      f"[dim]{escape(str(error))} — {escape(command)} tries again[/dim]")
+
+
+def _finish_explaining(explainer: Explainer) -> None:
+    """Wait for the explanations a one-shot command queued, with a spinner saying so.
+
+    ``lw ingest`` and ``lw watch --once`` exit when their work is done, and a
+    background thread dies with its process — so they wait here rather than
+    leave a report promising an answer that will never arrive. Ctrl-C stops
+    waiting without losing anything that matters: the unfinished pairs are put
+    back to "not explained yet", and ``lw explain`` writes them later.
+    """
+    if not explainer.outstanding:
+        explainer.stop()
+        return
+    try:
+        with err_console.status(f"writing {explainer.outstanding} AI explanation"
+                                f"{'s' if explainer.outstanding != 1 else ''}… (Ctrl-C to skip)"):
+            explainer.drain()
+    except KeyboardInterrupt:
+        err_console.print("[dim]skipped — `lw explain <function>` writes them later[/dim]")
+    finally:
+        explainer.stop()
+
+
 @app.command(rich_help_panel="Watching", **for_command("watch"))
 def watch(
     once: bool = typer.Option(False, "--once", help="Archive what is already there, then stop."),
@@ -1137,7 +1259,9 @@ def watch(
         cfg.watch.dirs = [str(Path(d).expanduser()) for d in dir]
 
     db = _open_db(cfg)
-    ingestor = Ingestor(cfg, db)
+    store = Store(cfg)
+    explainer = Explainer(cfg, db, store, on_done=_print_explained)
+    ingestor = Ingestor(cfg, db, store, explainer=explainer)
     watcher = Watcher(cfg, db, ingestor, on_result=_print_ingest_result)
     watcher.stop_on_termination()
     try:
@@ -1152,10 +1276,12 @@ def watch(
     if once:
         watcher.drain(timeout=cfg.watch.max_wait_seconds + 60)
         watcher.stop()
+        _finish_explaining(explainer)
         console.print("[dim]done[/dim]")
         return
     watcher.wait_forever()
     watcher.stop()
+    explainer.stop()
     console.print("[dim]stopped[/dim]")
 
 
@@ -1171,7 +1297,9 @@ def ingest(
     """Archive one or more zip files by hand."""
     cfg = _cfg()
     db = _open_db(cfg)
-    ingestor = Ingestor(cfg, db)
+    store = Store(cfg)
+    explainer = Explainer(cfg, db, store, on_done=_print_explained)
+    ingestor = Ingestor(cfg, db, store, explainer=explainer)
     failures = 0
     for path in paths:
         result = ingestor.ingest(Path(path).expanduser(), function, force, label)
@@ -1185,6 +1313,7 @@ def ingest(
         )
         if result.status == "failed":
             failures += 1
+    _finish_explaining(explainer)
     if failures:
         raise typer.Exit(1)
 
@@ -1470,19 +1599,7 @@ def diff(
     row = _resolve_function(db, function)
     function_id = int(row["id"])
 
-    b_seq = _resolve_seq(db, function_id, to, default_offset=0)
-    if from_ is None:
-        available = [int(v["seq"]) for v in db.list_versions(function_id) if int(v["seq"]) < b_seq]
-        if not available:
-            _fail(f"v{b_seq:04d} is the oldest archived version; nothing to compare it against")
-        a_seq = max(available)
-    else:
-        a_seq = _resolve_seq(db, function_id, from_, default_offset=1)
-
-    if a_seq == b_seq:
-        _fail("--from and --to are the same version")
-    if a_seq > b_seq:
-        a_seq, b_seq = b_seq, a_seq
+    a_seq, b_seq = _resolve_pair(db, function_id, from_, to)
 
     if mirror:
         if json_out or html or open_report or output:
@@ -1507,7 +1624,8 @@ def diff(
         # index only when the page sits beside it in reports/.
         archive_index = cfg.reports_dir / "index.html"
         write_html(result, target,
-                   archive_href="index.html" if output is None and archive_index.exists() else None)
+                   archive_href="index.html" if output is None and archive_index.exists() else None,
+                   ai=panel_for(store, result, AISettings.load(cfg.root)))
         console.print(f"[green]wrote[/green] {target}")
         if open_report and not _open_in_browser(target):
             err_console.print("[yellow]could not find a browser to show it in; "
@@ -1515,6 +1633,28 @@ def diff(
         return
 
     render_diff(console, result, show_diffs=not no_patch)
+    _mention_explanation(store, cfg, result)
+
+
+def _mention_explanation(store: Store, cfg: Config, result) -> None:
+    """One line after a terminal diff pointing at its AI explanation, or at the command that writes one.
+
+    Only when AI is switched on and could be used: someone who never set it up
+    is not nagged from the terminal on every diff — the report's card and bare
+    ``lw`` are where it is offered — and someone who switched it off hears
+    nothing at all.
+    """
+    settings = AISettings.load(cfg.root)
+    if not settings.enabled:
+        return
+    command = explain_command(result.function_name, result.a_seq, result.b_seq)
+    record = load_record(store, result.a_meta, result.b_meta)
+    if record is not None and record.explanation is not None and record.explanation.headline:
+        console.print(f"\n[magenta]✦[/magenta] {escape(record.explanation.headline)}  "
+                      f"[dim]— {escape(command)} shows the whole explanation[/dim]")
+    elif settings.resolve() is not None:
+        console.print(f"\n[magenta]✦[/magenta] [dim]{escape(command)} explains this change "
+                      "in plain English[/dim]")
 
 
 def _refresh_archive_index(cfg: Config, db: Database) -> None:
@@ -1531,7 +1671,7 @@ def _refresh_archive_index(cfg: Config, db: Database) -> None:
     if not (cfg.reports_dir / "index.html").exists():
         return
     try:
-        write_archive_index(db, cfg.reports_dir)
+        write_archive_index(db, cfg.reports_dir, store=Store(cfg))
     except OSError as exc:
         err_console.print(f"[yellow]could not update {cfg.reports_dir / 'index.html'}: {exc}. "
                           "`lw report` rewrites it.[/yellow]")
@@ -1567,7 +1707,7 @@ def _report_every_function(
         return
     page_dir = Path(output).expanduser() if output else cfg.reports_dir
     try:
-        index, count = write_archive_index(db, cfg.reports_dir, page_dir)
+        index, count = write_archive_index(db, cfg.reports_dir, page_dir, store=Store(cfg))
     except OSError as exc:
         _fail(f"could not write the report index into {page_dir}: {exc}. "
               "Pass --output with a folder you can write to.")
@@ -1624,6 +1764,8 @@ def report(
     # _refresh_archive_index below writes it; --output leaves no such guarantee.
     archive_href = "../index.html" if output is None else None
     include_vendor = True if vendor else None
+    settings = AISettings.load(cfg.root)
+    unexplained = 0
 
     for version in selected:
         seq = int(version["seq"])
@@ -1643,17 +1785,942 @@ def report(
             pair = _build_diff(db, store, cfg, row, a_seq, seq, include_vendor)
             filename = f"v{a_seq:04d}-v{seq:04d}.html"
             write_html(pair, target_dir / filename, archive_href=archive_href,
-                       history_href="index.html")
+                       history_href="index.html", ai=panel_for(store, pair, settings))
             entry["diff_href"] = filename
             entry["diff_summary"] = pair.headline()
+            explained = headline_for(store, pair.a_meta, pair.b_meta)
+            if explained:
+                entry["ai_headline"], entry["ai_risk"] = explained
+            else:
+                unexplained += 1
         entries.append(entry)
 
     index = target_dir / "index.html"
     index.write_text(render_timeline(row["name"], entries, archive_href=archive_href), encoding="utf-8")
     console.print(f"[green]wrote[/green] {index} [dim]({len(entries)} versions)[/dim]")
+    if unexplained and settings.enabled and settings.resolve() is not None:
+        # The history reads as a list of what each release did once every step
+        # has a headline; say how to get there rather than leave gaps unexplained.
+        console.print(f"[dim]{unexplained} step{'s' if unexplained != 1 else ''} not explained yet — "
+                      f"lw explain {escape(shell_word(row['name']))} --all writes "
+                      f"{'them' if unexplained != 1 else 'it'}[/dim]")
     if output is None:
         _refresh_archive_index(cfg, db)
     _offer_page(index, open_report)
+
+
+# ------------------------------------------------------------ explaining
+def _can_ask() -> bool:
+    """Whether there is a person at a terminal to answer a question.
+
+    One function rather than ``sys.stdin.isatty()`` at every question the AI
+    commands ask, so the walk-through can be tested: a test runner's input is
+    never a terminal, and without this the only path it could reach is the one
+    for scripts.
+    """
+    return sys.stdin.isatty()
+
+
+def _complete_model(incomplete: str) -> list[str]:
+    """Tab-completion for a saved model's name. Like :func:`_complete_function`, it never raises."""
+    try:
+        settings = AISettings.load(load_config(_CONFIG_PATH).root)
+        return [m.name for m in settings.models if m.name.lower().startswith(incomplete.lower())]
+    except Exception:                                 # noqa: BLE001 - never break a prompt
+        return []
+
+
+def _ai_settings(cfg: Config) -> AISettings:
+    """The AI settings, warning once if ``ai.json`` exists but could not be read.
+
+    A damaged file is never fatal — see :meth:`AISettings.load` — but it is
+    worth a line, because it means models the user set up are being ignored.
+    """
+    settings = AISettings.load(cfg.root)
+    if settings.problem:
+        err_console.print(f"[yellow]warning:[/yellow] {escape(settings.problem)}. It is being ignored; "
+                          "`lw ai add` starts a fresh one and keeps the old file as ai.json.broken.")
+    return settings
+
+
+def _usable_model(
+    cfg: Config, settings: AISettings, requested: str | None, *, interactive: bool
+) -> ModelEntry:
+    """The model to explain with, offering to set one up when there is none.
+
+    From a terminal, having no model is a question rather than an error:
+    "set one up now?" runs the same walk-through as ``lw ai add`` and carries
+    straight on with the explanation that was asked for. From a script it is
+    an error naming ``lw ai add``. A key found only in the environment is used,
+    with a note that saving it lets the background watcher use it too.
+    """
+    if not settings.enabled:
+        _fail("AI explanations are switched off. `lw ai on` turns them back on.")
+    entry = settings.resolve(requested)
+    if entry is None:
+        if not (interactive and _can_ask()):
+            _fail("no AI model is set up yet. `lw ai add` sets one up in a minute — Anthropic, "
+                  "OpenAI, Azure OpenAI or a model running on your own machine.")
+        console.print("No AI model is set up yet. It takes a minute: pick a service, paste a key.\n")
+        if not typer.confirm("  set one up now?", default=True):
+            raise typer.Exit(1)
+        entry = _add_model(cfg, settings)
+        console.print()
+    problem = entry.key_problem()
+    if problem:
+        _fail(f"{entry.label} cannot be used: {problem}.")
+    if entry.name not in {m.name for m in settings.models} and requested is None:
+        env = entry.key_env or "the environment"
+        err_console.print(f"[dim]using {entry.label} with the key in ${env}. `lw ai add "
+                          f"{entry.provider}` saves it, so the background watcher can use it too.[/dim]")
+    return entry
+
+
+def _explain_pair(cfg: Config, db: Database, store: Store, function_id: int, pair,
+                  settings: AISettings, entry: ModelEntry) -> Explanation | AIError:
+    """Explain one comparison from a terminal: pending, the request, then the saved result and pages.
+
+    The pair is marked pending first and its page rewritten, so a report
+    already open in a browser shows the explanation arriving. Retries print as
+    they happen — "rate limited — retrying in 8s (2 of 5)" — so a wait never
+    looks like a hang. Every outcome is saved and drawn: an answer replaces
+    the card, and a failure leaves the page saying what went wrong and how to
+    try again. Ctrl-C takes the pending mark back off before it exits.
+    """
+    def quietly_rewrite() -> None:
+        """Redraw the pair's pages, never letting a page failure hide the answer."""
+        try:
+            rewrite_pages(cfg, db, store, function_id, pair, settings)
+        except OSError as exc:
+            err_console.print(f"[yellow]could not update the report: {exc}[/yellow]")
+
+    save_pending(store, pair.a_meta, pair.b_meta, entry.label)
+    quietly_rewrite()
+    attempts = settings.max_retries + 1
+
+    def on_retry(attempt: int, wait: float, error: AIError) -> None:
+        """Say out loud that a request is being retried, and when."""
+        err_console.print(f"  [yellow]{escape(error.title)}[/yellow] [dim]— retrying in {wait:.0f}s "
+                          f"(attempt {attempt + 1} of {attempts})[/dim]")
+
+    try:
+        with err_console.status(f"asking {entry.label} what changed between "
+                                f"v{pair.a_seq:04d} and v{pair.b_seq:04d}…"):
+            explanation = explain_diff(pair, entry, settings, on_retry=on_retry)
+    except AIError as error:
+        save_failed(store, pair.a_meta, pair.b_meta, entry.label, error.as_dict())
+        quietly_rewrite()
+        return error
+    except KeyboardInterrupt:
+        clear_pending(store, pair.a_meta, pair.b_meta)
+        quietly_rewrite()
+        raise
+    save_done(store, pair.a_meta, pair.b_meta, explanation)
+    quietly_rewrite()
+    return explanation
+
+
+def _report_failure(error: AIError, command: str) -> None:
+    """Print a failed explanation: what went wrong, what to do, and the command that retries."""
+    err_console.print(f"[red]error:[/red] {escape(str(error))}")
+    if error.hint:
+        err_console.print(f"  [dim]what to do:[/dim] {escape(error.hint)}")
+    err_console.print(f"  [dim]the report is unchanged; this tries again:[/dim] {escape(command)}")
+
+
+def _provenance_line(explanation: Explanation) -> str:
+    """The dim line under a printed explanation: which model, how long, from how much of the change."""
+    parts = [f"by {explanation.model or explanation.model_name}"]
+    if explanation.seconds:
+        parts.append(f"{explanation.seconds:.1f}s")
+    if explanation.attempts > 1:
+        parts.append(f"{explanation.attempts} attempts")
+    if not explanation.send_code:
+        parts.append("structure only, no code sent")
+    elif explanation.files_total:
+        parts.append(f"from {explanation.files_sent} of {explanation.files_total} changed files")
+    if explanation.redactions:
+        parts.append(f"{explanation.redactions} value{'s' if explanation.redactions != 1 else ''} redacted")
+    return " · ".join(parts)
+
+
+def _print_dry_run(pair, settings: AISettings, entry: ModelEntry | None) -> None:
+    """Print exactly what ``lw explain`` would send for this pair, and send nothing.
+
+    Straight to stdout rather than through Rich: the prompt quotes code, and
+    Rich would read its square brackets as markup and wrap its long lines.
+    """
+    budget = settings.prompt_budget(entry) if entry else PROVIDERS["anthropic"].prompt_chars
+    built = build_prompt(pair, send_code=settings.send_code, budget=budget)
+    target = entry.label if entry else "your default model (none is set up yet; `lw ai add`)"
+    notes = [f"{len(built.text):,} characters",
+             f"{built.files_sent} of {built.files_total} changed files with their lines"]
+    if built.withheld:
+        notes.append(f"{len(built.withheld)} withheld")
+    notes.append(f"{built.redactions} value{'s' if built.redactions != 1 else ''} redacted")
+    sys.stdout.write(
+        f"# What `lw explain` would send to {target}.\n"
+        f"# {' · '.join(notes)}. Nothing was sent.\n\n"
+        f"----- instructions -----\n{SYSTEM_PROMPT}\n----- the change -----\n{built.text}\n"
+    )
+
+
+@app.command(rich_help_panel="Everyday", **for_command("explain"))
+def explain(
+    function: str = typer.Argument(..., help=FUNCTION_HELP, autocompletion=_complete_function),
+    from_: Optional[str] = typer.Option(
+        None, "--from", "-f", help="Older version (default: the one before --to)."
+    ),
+    to: Optional[str] = typer.Option(None, "--to", "-t", help="Newer version (default: latest)."),
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m", autocompletion=_complete_model,
+        help="A saved model's name, or any model id on your default model's service.",
+    ),
+    refresh: bool = typer.Option(
+        False, "--refresh", "-r", help="Ask again, even if this change was explained before."
+    ),
+    every: bool = typer.Option(
+        False, "--all", help="Explain every step of the history that has no explanation yet."
+    ),
+    limit: int = typer.Option(25, "--limit", "-n", help="With --all: how many recent steps to cover."),
+    open_report: bool = typer.Option(
+        False, "--open", help="Open the report with the explanation in your browser."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Print the explanation as JSON, for scripts."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print exactly what would be sent, and send nothing."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="With --all: do not ask before making several requests."
+    ),
+) -> None:
+    """Explain a change in plain English, print it, and add it to the report.
+
+    The answer is saved beside the version (see :mod:`lambda_watcher.ai.explanation`),
+    so asking again is instant and free; ``--refresh`` or a different
+    ``--model`` asks again. Everything that can go wrong on the way is sorted
+    into a message and a next step by :mod:`lambda_watcher.ai.providers`.
+    """
+    cfg = _cfg()
+    db = _open_db(cfg)
+    store = Store(cfg)
+    row = _resolve_function(db, function)
+    function_id = int(row["id"])
+    settings = _ai_settings(cfg)
+    include_vendor = True if cfg.report.include_vendor else None
+
+    if every:
+        _explain_history(cfg, db, store, row, settings, model, refresh=refresh, limit=limit,
+                         yes=yes, json_out=json_out, dry_run=dry_run)
+        return
+
+    a_seq, b_seq = _resolve_pair(db, function_id, from_, to)
+    pair = _build_diff(db, store, cfg, row, a_seq, b_seq, include_vendor)
+    if dry_run:
+        _print_dry_run(pair, settings, settings.resolve(model))
+        return
+
+    if not settings.enabled:
+        _fail("AI explanations are switched off. `lw ai on` turns them back on.")
+    record = load_record(store, pair.a_meta, pair.b_meta)
+    saved = record.explanation if record is not None else None
+    # A saved answer is reused unless asked not to — by --refresh, or by
+    # naming a model other than the one that wrote it.
+    chosen = settings.resolve(model) if model is not None else None
+    other_model = chosen is not None and saved is not None and chosen.name != saved.model_name
+    if saved is not None and not refresh and not other_model:
+        explanation: Explanation | AIError = saved
+        rewrite_pages(cfg, db, store, function_id, pair, settings)
+        fresh = False
+    else:
+        entry = _usable_model(cfg, settings, model, interactive=not json_out)
+        explanation = _explain_pair(cfg, db, store, function_id, pair, settings, entry)
+        fresh = True
+
+    command = explain_command(row["name"], a_seq, b_seq)
+    if isinstance(explanation, AIError):
+        _report_failure(explanation, command)
+        raise typer.Exit(1)
+
+    page = cfg.reports_dir / slugify(row["name"]) / f"v{a_seq:04d}-v{b_seq:04d}.html"
+    if json_out:
+        console.print_json(json.dumps({"function": row["name"], "from": a_seq, "to": b_seq,
+                                       "report": str(page), **explanation.as_dict()}))
+        return
+    render_explanation(console, explanation, function_name=row["name"], a_seq=a_seq, b_seq=b_seq)
+    console.print()
+    when = "" if fresh else f"saved {relative_ts(explanation.created_at)} · "
+    console.print(f"[dim]{escape(when + _provenance_line(explanation))}. AI can be wrong — "
+                  f"lw diff {escape(shell_word(row['name']))} --from {a_seq} --to {b_seq} "
+                  "is the record.[/dim]")
+    console.print(f"[dim]report: {_home_relative(page)}"
+                  + ("" if open_report else f" · {escape(command)} --open") + "[/dim]")
+    if not fresh:
+        console.print(f"[dim]{escape(command)} --refresh asks again[/dim]")
+    if open_report and not _open_in_browser(page):
+        err_console.print("[yellow]could not find a browser to show it in; "
+                          "open the file above yourself.[/yellow]")
+
+
+def _explain_history(cfg: Config, db: Database, store: Store, row, settings: AISettings,
+                     model: str | None, *, refresh: bool, limit: int, yes: bool, json_out: bool,
+                     dry_run: bool) -> None:
+    """``lw explain FN --all``: explain every step of a function's history that has no answer yet.
+
+    Oldest first, so the history fills in the order it happened. Asks before
+    making more than one request, because each one costs money on a paid
+    service; ``--yes`` skips the question. A failure that the next request
+    would repeat — a rejected key, an empty account — stops the run, while a
+    rate limit on one step only skips that step, and running the same command
+    again picks up exactly the steps still missing.
+    """
+    function_id = int(row["id"])
+    versions = db.list_versions(function_id, limit + 1)          # newest first
+    pairs = list(zip(versions[1:], versions[:-1], strict=True))   # (older, newer)
+    todo = []
+    for older, newer in reversed(pairs):
+        record = load_record(store, dict(older), dict(newer))
+        if refresh or record is None or record.explanation is None:
+            todo.append((int(older["seq"]), int(newer["seq"])))
+    if not pairs:
+        _fail(f"{row['name']} has only one version, so there is no change to explain yet.")
+    if not todo:
+        console.print(f"[green]every step of {escape(row['name'])}'s last {len(pairs)} is already "
+                      f"explained.[/green] [dim]lw report {escape(shell_word(row['name']))} shows "
+                      "them together; --refresh asks again.[/dim]")
+        return
+    if dry_run:
+        for a_seq, b_seq in todo:
+            console.print(f"  would explain v{a_seq:04d} → v{b_seq:04d}")
+        console.print(f"[dim]{len(todo)} request(s). Nothing was sent.[/dim]")
+        return
+    entry = _usable_model(cfg, settings, model, interactive=not json_out)
+    if len(todo) > 1 and not yes:
+        if not _can_ask():
+            _fail(f"this would make {len(todo)} requests to {entry.label}. Add --yes to go ahead.")
+        if not typer.confirm(f"  explain {len(todo)} steps with {entry.label}? "
+                             f"That is {len(todo)} requests.", default=True):
+            raise typer.Exit(1)
+
+    include_vendor = True if cfg.report.include_vendor else None
+    results: list[dict] = []
+    failed = 0
+    for a_seq, b_seq in todo:
+        pair = _build_diff(db, store, cfg, row, a_seq, b_seq, include_vendor)
+        outcome = _explain_pair(cfg, db, store, function_id, pair, settings, entry)
+        label = f"v{a_seq:04d} → v{b_seq:04d}"
+        if isinstance(outcome, AIError):
+            failed += 1
+            results.append({"from": a_seq, "to": b_seq, "error": outcome.as_dict()})
+            if not json_out:
+                console.print(f"  [yellow]✗[/yellow] {label}  [dim]{escape(str(outcome))}[/dim]")
+            if outcome.kind in {"auth", "quota", "setup", "tls", "not-found"}:
+                if not json_out:
+                    _report_failure(outcome, f"lw explain {shell_word(row['name'])} --all")
+                break
+            continue
+        results.append({"from": a_seq, "to": b_seq, **outcome.as_dict()})
+        if not json_out:
+            risk = f"  [dim]({outcome.risk} risk)[/dim]" if outcome.risk else ""
+            console.print(f"  [green]✓[/green] {label}  {escape(outcome.headline)}{risk}")
+    if json_out:
+        console.print_json(json.dumps({"function": row["name"], "steps": results}))
+    else:
+        done = len(results) - failed
+        console.print(f"\n[dim]explained {done} of {len(todo)} step{'s' if len(todo) != 1 else ''}"
+                      + (f"; run the same command again for the {failed} that failed" if failed else "")
+                      + f". lw report {escape(shell_word(row['name']))} shows the whole history.[/dim]")
+    _refresh_archive_index(cfg, db)
+    if failed:
+        raise typer.Exit(1)
+
+
+# ----------------------------------------------------------------- lw ai
+ai_app = typer.Typer(rich_markup_mode="rich")
+app.add_typer(ai_app, name="ai", rich_help_panel="Everyday", **for_group("ai"))
+
+
+@ai_app.callback(invoke_without_command=True)
+def _ai_main(ctx: typer.Context) -> None:
+    """Bare ``lw ai``: what is set up, and what to type next — the AI counterpart of bare ``lw``."""
+    if ctx.invoked_subcommand is None:
+        _print_ai_status(_cfg())
+
+
+def _print_ai_status(cfg: Config) -> None:
+    """Show the models, the default, the switches and the next commands worth typing.
+
+    Written for the two people who run it: someone who has never set AI up,
+    who needs to learn what it does and that nothing is sent until they say so,
+    and someone who has, who needs to see at a glance which model is in use,
+    where its key comes from, and whether it will run on its own.
+    """
+    settings = AISettings.load(cfg.root)
+    newest = None
+    try:
+        functions = _open_db(cfg).list_functions()
+        newest = functions[0]["name"] if functions else None
+    except Exception:                                 # noqa: BLE001 - a status must not fail
+        pass
+    target = shell_word(newest) if newest else "<function>"
+
+    if settings.problem:
+        console.print(f"[yellow]![/yellow] {escape(settings.problem)}\n"
+                      "  [dim]`lw ai add` starts a fresh one and keeps the old file as "
+                      "ai.json.broken[/dim]\n")
+
+    if not settings.models:
+        headline = "[yellow]off[/yellow]" if not settings.enabled else "[dim]not set up[/dim]"
+        console.print(f"[bold]AI explanations[/bold]  {headline}\n")
+        console.print(
+            "  A model can read each change and explain it in plain English: what the\n"
+            "  function now does differently, what could break, and what to do before\n"
+            "  deploying — in the terminal and in every report. It works with Anthropic,\n"
+            "  OpenAI, Azure OpenAI or a model on your own machine, and nothing is sent\n"
+            "  anywhere until you set one up."
+        )
+        detected = settings.detected_entries()
+        if detected:
+            env = detected[0].key_env
+            console.print(f"\n  [green]found ${env}[/green] in your environment — `lw explain {target}` "
+                          f"can use it now, and `lw ai add {detected[0].provider}` saves it for the watcher")
+        steps = [("lw ai add", "set one up — it takes a minute")]
+        if not settings.enabled:
+            steps.append(("lw ai on", "switch AI back on"))
+    else:
+        default = settings.default_entry()
+        if not settings.enabled:
+            state = "[yellow]off[/yellow] [dim]· nothing is sent anywhere until `lw ai on`[/dim]"
+        elif settings.auto_explain:
+            state = "[green]on[/green] [dim]· each new version is explained as it is archived[/dim]"
+        else:
+            state = "[green]on[/green] [dim]· only when you run lw explain[/dim]"
+        console.print(f"[bold]AI explanations[/bold]  {state}\n")
+        table = Table(box=None, header_style="bold", padding=(0, 2, 0, 2))
+        table.add_column("")
+        table.add_column("name")
+        table.add_column("service")
+        table.add_column("model")
+        table.add_column("key")
+        for entry in settings.models:
+            is_default = default is not None and entry.name == default.name
+            problem = entry.key_problem()
+            key = f"[red]{escape(entry.key_source())}[/red]" if problem else escape(entry.key_source())
+            where = entry.info.label
+            if entry.provider in {"azure", "local"} and entry.endpoint:
+                where += f" [dim]{escape(entry.endpoint)}[/dim]"
+            table.add_row("[green]●[/green]" if is_default else "", escape(entry.name), where,
+                          escape(entry.model) if entry.model != entry.name else "[dim]same[/dim]", key)
+        console.print(table)
+        console.print()
+        sends = ("the changed lines of your own code, with credentials redacted"
+                 if settings.send_code else "only the shape of each change — no code")
+        console.print(f"  [dim]sends      {sends}[/dim]")
+        console.print(f"  [dim]retries    up to {settings.max_retries} times on rate limits, "
+                      "outages, timeouts and dropped connections[/dim]")
+        if settings.path is not None:
+            console.print(f"  [dim]saved in   {_home_relative(settings.path)} · readable only by you[/dim]")
+        if default is not None and default.key_problem():
+            console.print(f"\n  [red]![/red] {escape(default.name)}: {escape(default.key_problem() or '')}")
+        steps = [(f"lw explain {target}", "explain the newest change")] if settings.enabled else [
+            ("lw ai on", "switch AI back on")]
+        steps.append(("lw ai add", "add another model"))
+        if len(settings.models) > 1:
+            steps.append(("lw ai use <name>", "switch the default"))
+        steps.append(("lw ai settings", "choose when it runs and what is sent"))
+    console.print()
+    width = max(len(command) for command, _ in steps)
+    for command, blurb in steps:
+        console.print(f"  [bold]{escape(command):<{width}}[/bold]   [dim]{blurb}[/dim]")
+
+
+def _choose(options: list[tuple[str, str]], prompt: str = "  choose", *, free_text: bool = False) -> str:
+    """Offer a numbered list and return the value picked, by number or by typing it.
+
+    ``options`` are ``(value, note)`` pairs and the first is the default, so
+    Enter takes the recommendation. With ``free_text`` anything typed that is
+    not a number is taken as the answer itself — how a model the list does not
+    show is still chosen.
+    """
+    width = max(len(value) for value, _ in options)
+    for index, (value, note) in enumerate(options, start=1):
+        console.print(f"  [bold]{index:>2}[/bold]  {escape(value):<{width}}   [dim]{escape(note)}[/dim]")
+    while True:
+        answer = typer.prompt(prompt, default="1").strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return options[int(answer) - 1][0]
+        matches = [value for value, _ in options if value.lower() == answer.lower()]
+        if matches:
+            return matches[0]
+        if free_text and answer:
+            return answer
+        err_console.print(f"  [yellow]pick a number from 1 to {len(options)}[/yellow]")
+
+
+def _model_choices(provider: str, listed: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The models to offer, recommended one first, from what the service listed or the built-in suggestions.
+
+    A service's own list is preferred because it is never stale and only holds
+    models the key can use; the suggestions in :data:`PROVIDERS` are the
+    fallback when it cannot be asked. At most ten, since a menu of forty
+    models helps nobody choose.
+    """
+    info = PROVIDERS[provider]
+    suggested = dict(info.suggestions)
+    if not listed:
+        return list(info.suggestions)
+    ids = [model_id for model_id, _ in listed]
+    ordered = [m for m, _ in info.suggestions if m in ids] + [m for m in ids if m not in suggested]
+    choices = []
+    for model_id in ordered[:10]:
+        note = suggested.get(model_id) or dict(listed).get(model_id, "")
+        choices.append((model_id, note))
+    return choices
+
+
+def _add_model(
+    cfg: Config,
+    settings: AISettings,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    key: str | None = None,
+    key_env: str | None = None,
+    endpoint: str | None = None,
+    api_version: str | None = None,
+    name: str | None = None,
+    make_default: bool = False,
+    auto: bool | None = None,
+    test: bool = True,
+) -> ModelEntry:
+    """Set up one model — asking for whatever was not given — check it answers, and save it.
+
+    The walk-through ``lw ai add`` and the "set one up now?" offer in ``lw
+    explain`` share. At a terminal every missing piece is asked for, with the
+    likely answer as the default: a key already in the environment or already
+    saved for the same service, the models the key can actually use, the
+    Ollama address. Without one, every missing piece that has no safe default
+    is an error naming the option that supplies it.
+
+    Nothing is saved until the model has answered one tiny request, unless
+    ``test`` is off: a model saved with a mistyped key would otherwise fail
+    for the first time in the background, where nobody is watching.
+    """
+    interactive = _can_ask()
+
+    # -- which service ----------------------------------------------------
+    if provider is None:
+        if not interactive:
+            _fail("say which service: `lw ai add anthropic`, `openai`, `azure` or `local`.")
+        console.print("[bold]Which AI service should explain your changes?[/bold]")
+        provider = _choose([(key_, f"{info.label} — {info.blurb}") for key_, info in PROVIDERS.items()])
+    chosen = provider_key(provider)
+    if chosen is None:
+        _fail(f"{provider!r} is not a service this knows. Choose anthropic, openai, azure or local.")
+    info = PROVIDERS[chosen]
+    console.print(f"\n[bold]{info.label}[/bold]")
+
+    # -- where it is ------------------------------------------------------
+    endpoint_value = ""
+    if chosen == "azure":
+        raw = endpoint
+        if not raw:
+            if not interactive:
+                _fail("Azure OpenAI needs --endpoint https://<resource>.openai.azure.com "
+                      "and --model <deployment name>.")
+            console.print("  [dim]paste the endpoint, or a whole Target URI, from your resource's "
+                          "Keys and Endpoint page[/dim]")
+            raw = typer.prompt("  endpoint")
+        base, deployment, version = parse_azure_endpoint(raw)
+        if not base or "." not in base:
+            _fail(f"{raw!r} does not look like an Azure endpoint, which reads like "
+                  "https://<resource>.openai.azure.com.")
+        endpoint_value = base
+        model = model or deployment or None
+        api_version = api_version or version or None
+    elif chosen == "local":
+        raw = endpoint
+        if not raw and interactive:
+            console.print("  [dim]Ollama serves on http://localhost:11434/v1 and LM Studio on "
+                          "http://localhost:1234/v1[/dim]")
+            raw = typer.prompt("  server URL", default="http://localhost:11434/v1")
+        endpoint_value = normalize_local_url(raw or "")
+    elif endpoint:
+        endpoint_value = endpoint.strip().rstrip("/")
+
+    # -- the key ----------------------------------------------------------
+    api_key = (key or "").strip().strip("'\"")
+    env_name = (key_env or "").strip().lstrip("$")
+    if env_name and not os.environ.get(env_name):
+        err_console.print(f"  [yellow]${env_name} is not set in this shell[/yellow] [dim]— saved anyway; "
+                          "it has to be set wherever lw runs, the background watcher included[/dim]")
+    if not api_key and not env_name:
+        same = next((m for m in settings.models if m.provider == chosen and m.api_key
+                     and m.endpoint == endpoint_value), None)
+        in_env = next((e for e in info.key_envs if os.environ.get(e)), None)
+        if interactive:
+            if same is not None and typer.confirm(f"  use the key already saved for {same.name}?",
+                                                  default=True):
+                api_key = same.api_key
+            elif in_env and typer.confirm(f"  use the key in ${in_env}?", default=True):
+                api_key = os.environ[in_env]
+            elif info.needs_key:
+                if info.key_url:
+                    console.print(f"  [dim]get a key at {escape(info.key_url)}[/dim]")
+                while not api_key:
+                    api_key = typer.prompt("  API key (typing is hidden)", hide_input=True).strip()
+            else:
+                api_key = typer.prompt("  API key, if your server needs one (Enter for none)",
+                                       hide_input=True, default="", show_default=False).strip()
+        elif same is not None:
+            api_key = same.api_key
+        elif in_env:
+            api_key = os.environ[in_env]
+            console.print(f"  [dim]using the key in ${in_env}[/dim]")
+        elif info.needs_key:
+            _fail(f"{info.label} needs an API key: `lw ai add {chosen} --key <key>`, or "
+                  f"`--key-env VARIABLE` to read it from the environment.")
+
+    # -- which model ------------------------------------------------------
+    probe = ModelEntry(name="probe", provider=chosen, model=model or info.default_model,
+                       api_key=api_key, key_env=env_name, endpoint=endpoint_value,
+                       api_version=api_version or "")
+    if not model:
+        if chosen == "azure":
+            if not interactive:
+                _fail("Azure OpenAI needs the deployment name: --model <deployment>.")
+            console.print("  [dim]the deployment name is under Azure AI Foundry → Deployments[/dim]")
+            model = typer.prompt("  deployment name").strip()
+        else:
+            listed: list[tuple[str, str]] = []
+            try:
+                with err_console.status("asking which models are available…"):
+                    listed = list_models(probe, timeout=15)
+            except AIError as error:
+                if error.kind in {"auth", "network", "tls"} and chosen != "local":
+                    err_console.print(f"  [yellow]{escape(str(error))}[/yellow]")
+            choices = _model_choices(chosen, listed)
+            if not choices:
+                if not interactive:
+                    _fail("say which model: --model <name>. `ollama list` shows what Ollama has.")
+                model = typer.prompt("  model name (`ollama list` shows what you have)").strip()
+            elif interactive:
+                console.print("  [bold]Which model?[/bold] [dim](or type any model id)[/dim]")
+                model = _choose(choices, "  model", free_text=True)
+            else:
+                model = choices[0][0]
+    model = model.strip()
+    entry = ModelEntry(name=(name or "").strip() or settings.unique_name(model, chosen),
+                       provider=chosen, model=model, api_key=api_key, key_env=env_name,
+                       endpoint=endpoint_value, api_version=(api_version or "").strip())
+
+    # -- does it answer ---------------------------------------------------
+    if test:
+        try:
+            with err_console.status(f"checking {entry.label} answers…"):
+                reply = ping(entry, timeout=300.0 if chosen == "local" else 60.0)
+        except AIError as error:
+            if error.kind in {"rate-limit", "overloaded"}:
+                # Being told to slow down proves the key and the model were
+                # accepted — a service only rate-limits a request it would
+                # otherwise have served — so this is a busy service, not a
+                # wrong setup, and refusing to save would be refusing a
+                # working model.
+                console.print(f"  [green]✓[/green] {escape(entry.label)} accepted the key "
+                              f"[dim](it is busy right now: {escape(error.title)})[/dim]")
+            else:
+                err_console.print(f"  [red]✗[/red] {escape(str(error))}")
+                if error.hint:
+                    err_console.print(f"    [dim]what to do:[/dim] {escape(error.hint)}")
+                if not (interactive and typer.confirm("  save it anyway?", default=False)):
+                    _fail("nothing was saved. Fix the above and run `lw ai add` again, or add "
+                          "--no-test to save it without checking.")
+        else:
+            console.print(f"  [green]✓[/green] {escape(entry.label)} answered in {reply.seconds:.1f}s")
+
+    # -- when to use it ---------------------------------------------------
+    first = not settings.models
+    if auto is None and interactive and first:
+        where = "your own machine" if chosen == "local" else info.label
+        console.print(f"\n  [dim]Explaining automatically sends each new version's changed code to "
+                      f"{escape(where)}, with credentials redacted.[/dim]")
+        auto = typer.confirm("  explain each new version automatically as it is archived?", default=True)
+    if auto is not None:
+        settings.auto_explain = auto
+    was_off = not settings.enabled
+    settings.enabled = True
+    replaced = settings.add(entry, make_default=make_default)
+    try:
+        path = settings.save()
+    except SettingsError as exc:
+        _fail(f"{exc}. Check the archive folder is writable (`lw doctor`).")
+
+    is_default = settings.default == entry.name
+    verb = "updated" if replaced else "saved"
+    console.print(f"\n  [green]✓[/green] {verb} [bold]{escape(entry.name)}[/bold] "
+                  f"({escape(info.label)}){' — your default model' if is_default else ''}")
+    if api_key:
+        console.print(f"    [dim]key saved in {_home_relative(path)}, readable only by you[/dim]")
+    elif env_name:
+        console.print(f"    [dim]key read from ${env_name} whenever it is needed[/dim]")
+    if was_off:
+        console.print("    [dim]AI was switched off; adding a model switched it back on[/dim]")
+    if settings.auto_explain:
+        console.print("    [dim]new versions are explained as they are archived · "
+                      "lw ai settings --no-auto stops that[/dim]")
+    else:
+        console.print("    [dim]explanations are written when you run lw explain · "
+                      "lw ai settings --auto writes them for every new version[/dim]")
+    return entry
+
+
+@ai_app.command("add", **for_command("ai add"))
+def ai_add(
+    provider: Optional[str] = typer.Argument(
+        None, help="anthropic, openai, azure or local. Leave it out to be asked."
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m",
+        help="The model id; for Azure, the deployment name. Leave it out to pick from a list.",
+    ),
+    key: Optional[str] = typer.Option(
+        None, "--key", help="The API key. Leave it out to be asked without it showing on screen."
+    ),
+    key_env: Optional[str] = typer.Option(
+        None, "--key-env", help="Read the key from this environment variable instead of saving it."
+    ),
+    endpoint: Optional[str] = typer.Option(
+        None, "--endpoint",
+        help="Azure: the resource URL or a Target URI. Local: the server URL. "
+             "Others: a gateway, if you use one.",
+    ),
+    api_version: Optional[str] = typer.Option(
+        None, "--api-version", help="Azure only: an API version to pin."
+    ),
+    name: Optional[str] = typer.Option(None, "--name", help="What to call it (default: the model id)."),
+    default: bool = typer.Option(False, "--default", help="Make it the default even if another model is."),
+    auto: Optional[bool] = typer.Option(
+        None, "--auto/--no-auto", help="Explain new versions automatically as they are archived."
+    ),
+    test: bool = typer.Option(True, "--test/--no-test", help="Check it answers before saving it."),
+) -> None:
+    """Add a model through :func:`_add_model`, then name the commands worth typing next."""
+    cfg = _cfg()
+    settings = _ai_settings(cfg)
+    entry = _add_model(cfg, settings, provider=provider, model=model, key=key, key_env=key_env,
+                       endpoint=endpoint, api_version=api_version, name=name, make_default=default,
+                       auto=auto, test=test)
+    newest = None
+    try:
+        functions = _open_db(cfg).list_functions()
+        newest = functions[0]["name"] if functions else None
+    except Exception:                                 # noqa: BLE001 - only picking an example
+        pass
+    console.print()
+    target = shell_word(newest) if newest else "<function>"
+    console.print(f"  [bold]lw explain {escape(target)}[/bold]   [dim]explain the newest change now[/dim]")
+    console.print(f"  [bold]{'lw ai':<{len('lw explain ' + target)}}[/bold]   "
+                  f"[dim]see and change your AI setup[/dim]")
+    if entry.provider == "local":
+        console.print("\n[dim]A local model sees a smaller slice of each change; "
+                      "`lw ai settings --max-prompt-kb 32` gives it more if it has the context for it.[/dim]")
+
+
+def _find_model(settings: AISettings, name: str) -> ModelEntry:
+    """A saved model by name or unique part of one, or exit listing the saved names."""
+    entry = settings.find(name)
+    if entry is None:
+        saved = ", ".join(m.name for m in settings.models)
+        _fail(f"no saved model matches {name!r}. " + (f"Saved: {saved}." if saved else
+              "None is saved yet; `lw ai add` sets one up."))
+    return entry
+
+
+@ai_app.command("remove", **for_command("ai remove"))
+def ai_remove(
+    name: str = typer.Argument(
+        ..., help="The model's name, as `lw ai` lists it.", autocompletion=_complete_model
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
+) -> None:
+    """Forget a saved model and its key, handing the default on if it held it."""
+    cfg = _cfg()
+    settings = _ai_settings(cfg)
+    entry = _find_model(settings, name)
+    if not yes:
+        if not _can_ask():
+            _fail(f"add --yes to remove {entry.name} without being asked.")
+        if not typer.confirm(f"remove {entry.label} and any key saved with it?", default=False):
+            raise typer.Abort()
+    was_default = settings.default_entry() is not None and settings.default_entry().name == entry.name  # type: ignore[union-attr]
+    now_default = settings.remove(entry)
+    try:
+        settings.save()
+    except SettingsError as exc:
+        _fail(str(exc))
+    console.print(f"[green]removed[/green] {escape(entry.name)}")
+    if now_default is None:
+        console.print("[dim]no models are left, so nothing will be explained until `lw ai add`[/dim]")
+    elif was_default:
+        console.print(f"[dim]{escape(now_default.name)} is the default now · "
+                      "lw ai use <name> picks another[/dim]")
+
+
+@ai_app.command("use", **for_command("ai use"))
+def ai_use(
+    name: str = typer.Argument(
+        ..., help="The model's name, as `lw ai` lists it.", autocompletion=_complete_model
+    ),
+) -> None:
+    """Make a saved model the one ``lw explain`` and the watcher use."""
+    cfg = _cfg()
+    settings = _ai_settings(cfg)
+    entry = _find_model(settings, name)
+    settings.default = entry.name
+    try:
+        settings.save()
+    except SettingsError as exc:
+        _fail(str(exc))
+    console.print(f"[green]{escape(entry.name)}[/green] ({escape(entry.info.label)}) is the default now "
+                  "[dim]· lw explain and the watcher use it from the next request[/dim]")
+    if entry.key_problem():
+        err_console.print(f"[yellow]but:[/yellow] {escape(entry.key_problem() or '')}")
+
+
+@ai_app.command("test", **for_command("ai test"))
+def ai_test(
+    name: Optional[str] = typer.Argument(
+        None, help="The model to test (default: the default model).", autocompletion=_complete_model
+    ),
+    every: bool = typer.Option(False, "--all", help="Test every saved model."),
+) -> None:
+    """Send each chosen model the smallest request there is, and say how it went. Exits 1 on any failure."""
+    cfg = _cfg()
+    settings = _ai_settings(cfg)
+    if every:
+        entries = list(settings.models)
+    elif name:
+        entries = [_find_model(settings, name)]
+    else:
+        found = settings.resolve()
+        entries = [found] if found else []
+    if not entries:
+        _fail("no AI model is set up yet. `lw ai add` sets one up.")
+    failed = 0
+    for entry in entries:
+        try:
+            with err_console.status(f"asking {entry.label}…"):
+                reply = ping(entry, timeout=300.0 if entry.provider == "local" else 60.0,
+                             retries=settings.max_retries)
+        except AIError as error:
+            failed += 1
+            console.print(f"[red]✗[/red] {escape(entry.name)}  {escape(str(error))}")
+            if error.hint:
+                console.print(f"  [dim]what to do: {escape(error.hint)}[/dim]")
+            continue
+        console.print(f"[green]✓[/green] {escape(entry.name)}  [dim]{escape(entry.label)} answered "
+                      f"in {reply.seconds:.1f}s[/dim]")
+    if failed:
+        raise typer.Exit(1)
+
+
+def _switch_ai(enabled: bool) -> None:
+    """Flip the master switch and say what it means now."""
+    cfg = _cfg()
+    settings = _ai_settings(cfg)
+    settings.enabled = enabled
+    try:
+        settings.save()
+    except SettingsError as exc:
+        _fail(str(exc))
+    if enabled:
+        console.print("[green]AI explanations are on.[/green]"
+                      + ("" if settings.models else " [dim]No model is set up yet — `lw ai add`.[/dim]"))
+    else:
+        console.print("[yellow]AI explanations are off.[/yellow] [dim]Nothing is sent anywhere and reports "
+                      "stop mentioning AI. Your models and keys are kept; `lw ai on` turns it back on.[/dim]")
+
+
+@ai_app.command("on", **for_command("ai on"))
+def ai_on() -> None:
+    """Switch AI explanations back on."""
+    _switch_ai(True)
+
+
+@ai_app.command("off", **for_command("ai off"))
+def ai_off() -> None:
+    """Switch AI explanations off, keeping every model and key."""
+    _switch_ai(False)
+
+
+@ai_app.command("settings", **for_command("ai settings"))
+def ai_settings(
+    auto: Optional[bool] = typer.Option(
+        None, "--auto/--no-auto", help="Explain each new version as it is archived, or only when asked."
+    ),
+    send_code: Optional[bool] = typer.Option(
+        None, "--send-code/--no-send-code",
+        help="Send the changed lines of your code, or only the shape of each change.",
+    ),
+    retries: Optional[int] = typer.Option(
+        None, "--retries", min=0, max=20,
+        help="How many times to retry a request that failed for a passing reason.",
+    ),
+    timeout: Optional[int] = typer.Option(
+        None, "--timeout", min=0, help="Seconds to wait for a silent service. 0 means the service's default."
+    ),
+    max_prompt_kb: Optional[int] = typer.Option(
+        None, "--max-prompt-kb", min=0, help="Most of a change to send, in KB. 0 means the service's default."
+    ),
+) -> None:
+    """Show the switches, and change the ones given. Every row says how to flip it."""
+    cfg = _cfg()
+    settings = _ai_settings(cfg)
+    changes = {"auto_explain": auto, "send_code": send_code, "max_retries": retries,
+               "timeout_seconds": timeout, "max_prompt_kb": max_prompt_kb}
+    changed = {k: v for k, v in changes.items() if v is not None}
+    if changed:
+        for attribute, value in changed.items():
+            setattr(settings, attribute, value)
+        try:
+            settings.save()
+        except SettingsError as exc:
+            _fail(str(exc))
+        console.print("[green]saved.[/green] [dim]The running watcher uses it from the next version; "
+                      "no restart needed.[/dim]\n")
+
+    default_timeout = "the service's default (240s, or 600s for a local model)"
+    default_size = "the service's default (about 150 KB, 16 KB for a local model)"
+    rows = [
+        ("AI explanations", "on" if settings.enabled else "off",
+         "master switch" if settings.enabled else "nothing is sent anywhere",
+         "lw ai off" if settings.enabled else "lw ai on"),
+        ("automatic", "on" if settings.auto_explain else "off",
+         "each new version is explained as it is archived" if settings.auto_explain
+         else "only when you run lw explain",
+         "lw ai settings --no-auto" if settings.auto_explain else "lw ai settings --auto"),
+        ("code sent", "yes" if settings.send_code else "no",
+         "changed lines of your own code, credentials redacted" if settings.send_code
+         else "only files, dependencies, env vars and services",
+         "lw ai settings --no-send-code" if settings.send_code else "lw ai settings --send-code"),
+        ("retries", str(settings.max_retries), "rate limits, outages, timeouts, dropped connections",
+         "lw ai settings --retries 6"),
+        ("timeout", f"{settings.timeout_seconds}s" if settings.timeout_seconds else "default",
+         default_timeout if not settings.timeout_seconds else "per request, while nothing arrives",
+         "lw ai settings --timeout 600"),
+        ("prompt size", f"{settings.max_prompt_kb} KB" if settings.max_prompt_kb else "default",
+         default_size if not settings.max_prompt_kb else "the most of one change that is sent",
+         "lw ai settings --max-prompt-kb 60"),
+    ]
+    table = Table(box=None, header_style="bold", padding=(0, 2, 0, 0))
+    table.add_column("setting")
+    table.add_column("now")
+    table.add_column("what it means", style="dim")
+    table.add_column("change it", style="dim")
+    for setting, value, meaning, command in rows:
+        style = "green" if value in {"on", "yes"} else ("yellow" if value in {"off", "no"} else "")
+        table.add_row(setting, f"[{style}]{value}[/{style}]" if style else value, meaning, command)
+    console.print(table)
 
 
 # ---------------------------------------------------------------- editing

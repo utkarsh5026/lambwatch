@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.rule import Rule
@@ -12,6 +14,9 @@ from rich.text import Text
 from ..utils import human_size, rename_label, signed, slugify
 from .compare import MoveGroup, VersionDiff
 from .intraline import EDIT_CONTEXT
+
+if TYPE_CHECKING:
+    from ..ai.explanation import Explanation
 
 _KIND_STYLE = {
     "added": "green",
@@ -376,3 +381,59 @@ def render(console: Console, diff: VersionDiff, show_diffs: bool = True) -> None
     render_files(console, diff, show_diffs=show_diffs)
     if diff.is_empty:
         console.print("\n[green]These two versions are identical.[/green]")
+
+
+_RISK_STYLE = {"high": "bold red", "medium": "yellow", "low": "green"}
+_CHANGE_STYLE = {
+    "feature": "green", "fix": "cyan", "behaviour": "cyan", "security": "bold red",
+    "removal": "red", "config": "yellow", "dependency": "yellow",
+}
+
+
+def render_explanation(console: Console, explanation: Explanation, *, function_name: str,
+                       a_seq: int, b_seq: int) -> None:
+    """Print an AI explanation the way ``lw explain`` shows it.
+
+    The same content as the report's card, laid out for a terminal: the
+    headline and summary in a violet-edged panel — the colour the report uses
+    for anything a model wrote — then the changes, what is worth checking, and
+    the deploy checklist, each file named so it can be found in ``lw diff``.
+    """
+    head = Text()
+    head.append(function_name, style="bold")
+    head.append(f"   v{a_seq:04d} → v{b_seq:04d}", style="bold cyan")
+    if explanation.risk:
+        head.append(f"   {explanation.risk} risk", style=_RISK_STYLE.get(explanation.risk, ""))
+    rows: list[Text] = [head]
+    if explanation.headline:
+        rows.append(Text(explanation.headline, style="bold"))
+    if explanation.summary and explanation.summary != explanation.headline:
+        rows.append(Text(explanation.summary))
+    if explanation.risk_reason:
+        rows.append(Text(f"why {explanation.risk or 'this'} risk: {explanation.risk_reason}", style="dim"))
+    console.print(Panel(Group(*rows), border_style="magenta", title="✦ what changed",
+                        title_align="left", expand=False))
+
+    def listing(title: str, points, styles: dict[str, str]) -> None:
+        """One titled list of changes or risks, each with the files it is about."""
+        if not points:
+            return
+        console.print(f"\n[bold]{title}[/bold]")
+        table = Table(box=None, show_header=False, padding=(0, 2, 0, 2))
+        table.add_column(no_wrap=True)
+        table.add_column(ratio=1)
+        for point in points:
+            body = Text(point.title, style="bold")
+            if point.detail:
+                body.append("\n" + point.detail)
+            if point.files:
+                body.append("\n" + ", ".join(point.files), style="dim")
+            table.add_row(Text(point.kind, style=styles.get(point.kind, "dim")), body)
+        console.print(table)
+
+    listing("Changes", explanation.changes, _CHANGE_STYLE)
+    listing("Worth checking", explanation.risks, _RISK_STYLE)
+    if explanation.checklist:
+        console.print("\n[bold]Deploy checklist[/bold]")
+        for step in explanation.checklist:
+            console.print(Text(f"  ☐ {step}"))
