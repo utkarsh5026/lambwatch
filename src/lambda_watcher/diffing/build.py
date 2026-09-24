@@ -11,6 +11,7 @@ gets the same treatment: see :func:`write_archive_index`.
 from __future__ import annotations
 
 import os
+import threading
 from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -76,7 +77,7 @@ def _href(target: Path, page_dir: Path) -> str:
 
 
 def archive_index_entries(
-    db: Database, reports_dir: Path, page_dir: Path | None = None
+    db: Database, reports_dir: Path, page_dir: Path | None = None, store: Store | None = None
 ) -> list[dict[str, Any]]:
     """One row per archived function for :func:`render_archive_index`, newest archive first.
 
@@ -93,7 +94,14 @@ def archive_index_entries(
 
     A function with no versions at all — its only ingest failed after it was
     named — has nothing to show and is left out.
+
+    With a ``store``, each row also carries the headline of its latest change's
+    AI explanation, when there is one: a single file read per function, cheap
+    enough for every ingest, and the difference between a front page that says
+    *something changed* and one that says *what*.
     """
+    from ..ai.report import headline_for
+
     page_dir = page_dir or reports_dir
     entries: list[dict[str, Any]] = []
     for function in db.list_functions():
@@ -120,31 +128,38 @@ def archive_index_entries(
             "change_href": _href(change, page_dir) if change and change.exists() else None,
             "history_href": _href(history, page_dir) if history.exists() else None,
         })
+        if store is not None and previous is not None:
+            explained = headline_for(store, dict(previous), dict(latest))
+            if explained:
+                entries[-1]["ai_headline"], entries[-1]["ai_risk"] = explained
     # Stored times are UTC ISO strings to the second, so they sort as text.
     entries.sort(key=lambda entry: entry["ingested_at"] or "", reverse=True)
     return entries
 
 
 def write_archive_index(
-    db: Database, reports_dir: Path, page_dir: Path | None = None
+    db: Database, reports_dir: Path, page_dir: Path | None = None, store: Store | None = None
 ) -> tuple[Path, int]:
     """Write ``index.html``, the page linking every function's reports, and say how many it lists.
 
     ``page_dir`` defaults to ``reports_dir`` itself, which is where the ingest,
     ``lw report`` and the housekeeping commands all keep it; ``lw report
     --output`` is the only caller that moves it, and :func:`_href` keeps the
-    links working from wherever it lands.
+    links working from wherever it lands. ``store`` lets each row quote its
+    latest AI headline; see :func:`archive_index_entries`.
 
     Written to a temporary file and swapped into place, because two processes
     can rewrite it at once — the background watcher archiving something while
     ``lw report`` runs in a terminal — and a browser reloading halfway through a
-    plain rewrite would get half a page.
+    plain rewrite would get half a page. Two threads of one process can too — the
+    watcher's ingest thread and its AI explainer — which is why the scratch name
+    carries the thread as well as the process.
     """
     page_dir = page_dir or reports_dir
-    entries = archive_index_entries(db, reports_dir, page_dir)
+    entries = archive_index_entries(db, reports_dir, page_dir, store)
     page_dir.mkdir(parents=True, exist_ok=True)
     target = page_dir / "index.html"
-    scratch = page_dir / f".index.html.{os.getpid()}.tmp"
+    scratch = page_dir / f".index.html.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         scratch.write_text(render_archive_index(entries), encoding="utf-8")
         os.replace(scratch, target)

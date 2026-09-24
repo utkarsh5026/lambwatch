@@ -201,6 +201,27 @@ vendored `package.json`) — because only the installed version is what actually
 | Analysis | [analysis/](src/lambda_watcher/analysis/) | One module per facet (runtime, handler, deps, envvars, services, secrets, inventory), composed by `analyse()` |
 | Persistence | [store.py](src/lambda_watcher/store.py), [db.py](src/lambda_watcher/db.py), [gitmirror.py](src/lambda_watcher/gitmirror.py) | Directory layout, SQLite index, git mirror |
 | Presentation | [diffing/](src/lambda_watcher/diffing/), [cli.py](src/lambda_watcher/cli.py) | Compare, render text/HTML, Typer commands. `diffing/build.py` assembles a diff from the index — use it rather than calling `compare_versions` with a dozen lookups again |
+| AI | [ai/](src/lambda_watcher/ai/) | Optional plain-English explanations of a `VersionDiff`: settings (`ai.json`), prompt, providers over stdlib HTTPS, the saved record, the background `Explainer` |
+
+### AI explanations sit on top of the diff, not beside it
+
+[ai/](src/lambda_watcher/ai/) turns an existing `VersionDiff` into prose; it never reads a zip and is
+**not** an analysis facet (an explanation describes a *pair* of versions). Its rules:
+
+- **Nothing in `index.db`.** An explanation is neither in a manifest nor reproducible, so it lives at
+  `versions/<newer>/explanations/from-<older tree hash>.json` — moved by `rename`, carried by `merge`,
+  deleted by `rm`/pruning, invisible to `reindex`. No folder means "not explained yet".
+- **Settings live in `<archive>/ai.json`** (0600, written by `lw ai`), never in `config.yaml`, and are
+  re-read per job so `lw ai off` needs no restart. Keys from the environment are used from a terminal
+  only; the background watcher explains with *saved* models alone.
+- **Never fail an ingest, never block the queue.** The ingest marks the pair pending and hands it to
+  `Explainer`, a separate thread that only reads the index and writes files. Only `lw watch` and
+  `lw ingest` pass an explainer; backfill, setup and the demo never make requests.
+- **No SDKs.** Four JSON-over-HTTPS wire formats in `providers.py` keep the install dependency-free.
+  Every failure is an `AIError` whose `hint` is the next command; retry policy lives in `with_retries`.
+- **What is sent is decided in `prompt.py`**: vendored files never, credential files by name only,
+  every line through `redact()`. `lw explain --dry-run` prints exactly that. Tests talk to a scripted
+  localhost server (`tests/test_ai.py::FakeService`), never a real service.
 
 ### Adding an analysis facet touches seven places
 

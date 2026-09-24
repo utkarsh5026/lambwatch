@@ -223,6 +223,54 @@ the manual recipes.
 
 </details>
 
+## Explained in plain English (optional)
+
+Add an AI model once and every change is also explained for you — what the
+function now does differently, what is worth checking before it ships, and a
+deploy checklist:
+
+```bash
+lw ai add                  # pick a service, paste a key, pick a model; it checks the model answers
+lw explain order-processor # explain the latest change, here and in the report
+```
+
+`lw ai add` works with Anthropic, OpenAI, Azure OpenAI (paste the endpoint or
+the whole Target URI from the portal) and any model on your own machine —
+Ollama, LM Studio, vLLM. There is nothing to install: it uses Python's own
+HTTPS, and a key you already export as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
+is picked up without asking.
+
+From then on the watcher explains each new version in the background, and the
+HTML report opens on the answer: every file it mentions opens that file's diff,
+each changed file gets a one-line note, the deploy checklist remembers what you
+ticked, and the history page lists what each release *did*. A report opened
+while the explanation is being written reloads itself when it lands. Reports
+written before you added a model get one with `lw explain`, and `--all` fills in
+a function's whole history.
+
+What leaves the machine, and when, is yours to decide:
+
+```bash
+lw explain order-processor --dry-run   # print exactly what would be sent; send nothing
+lw ai settings --no-auto               # explain only when asked, not every new version
+lw ai settings --no-send-code          # send the shape of a change, never a line of code
+lw ai use quick                        # switch between saved models
+lw ai off                              # stop entirely, keeping your keys (lw ai on undoes it)
+```
+
+Vendored packages are never sent, files like `.env` and `*.pem` are named but
+never quoted, and anything credential-shaped is replaced before sending — a
+mitigation, not a guarantee, so for code that must not leave your machine use
+`--no-send-code` or a local model. Keys live in `~/.lambda-watcher/ai.json`,
+readable only by you, never in `config.yaml`.
+
+Rate limits, overloads, timeouts and dropped connections are retried with
+backoff, honouring the service's own `Retry-After`; an account out of credit is
+told apart from a rate limit and not retried pointlessly; a change too large for
+the model is sent again smaller. If a request still fails, the report says why
+and gives the command that tries again. `lw ai test` checks a model still
+answers, and `lw doctor` flags a saved model whose key has gone missing.
+
 ## Commands
 
 | Command | What it does |
@@ -240,6 +288,8 @@ the manual recipes.
 | `show FN [V]` | Runtime, handler, dependencies, env vars, services and findings for one version. `--files`, `--json`. |
 | `diff FN` | Compare two versions. Defaults to the last two. `--from`/`--to`, `--html`, `--open`, `--vendor`, `--whitespace`, `--no-patch`, `--json`. |
 | `report FN` | Build a browsable HTML history: an index plus a diff for every step, opened in your browser. `--no-open` just writes it. |
+| `explain FN` | Explain a change in plain English with an AI model, here and in the report. `--from`/`--to`, `--model`, `--refresh`, `--all`, `--dry-run`, `--json`, `--open`. |
+| `ai` | Set up and manage the AI models: `ai add`, `ai remove`, `ai use`, `ai test`, `ai settings`, `ai on` / `ai off`. On its own, shows what is set up. |
 | `export FN [V]` | Get a version back out as a deployable zip (`--zip`) or a plain folder (`--tree`). |
 | `open FN [V]` | Open the function's mirror in your editor — every version in one folder, with history. Name a version to open just its files. |
 | `git FN ...` | Run git inside that function's mirror repo: `lw git order-processor log --oneline`. |

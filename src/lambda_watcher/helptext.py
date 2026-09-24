@@ -27,7 +27,7 @@ from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from typer.core import TyperCommand
+from typer.core import TyperCommand, TyperGroup
 
 #: What every function argument accepts: ``order`` finds ``order-processor``.
 FUNCTION_HELP = "The function, as `lw ls` lists it. Any unique part of the name works."
@@ -79,13 +79,38 @@ class ExamplesCommand(TyperCommand):
     never the one in use.
     """
 
+    #: The key this command's entry is filed under — ``"diff"``, or ``"ai add"``
+    #: for a command inside a group, whose own name is only ``add``. Set on the
+    #: per-command subclass :func:`for_command` makes.
+    help_key: str = ""
+
     def format_help(self, ctx: typer.Context, formatter: Any) -> None:
         """Typer's help as usual, then this command's examples, if it has any."""
         super().format_help(ctx, formatter)
-        entry = COMMANDS.get(self.name or "")
-        if entry is not None and entry.examples:
-            console = Console()
-            console.print(examples_panel(entry.examples, console.width))
+        _print_examples(self.help_key or self.name or "")
+
+
+class ExamplesGroup(TyperGroup):
+    """A command group whose ``--help`` ends in worked examples, as a command's does.
+
+    ``lw ai --help`` lists the subcommands; the examples under them are what
+    shows how the subcommands fit together, which the list alone cannot.
+    """
+
+    help_key: str = ""
+
+    def format_help(self, ctx: typer.Context, formatter: Any) -> None:
+        """Typer's group help as usual, then the group's examples."""
+        super().format_help(ctx, formatter)
+        _print_examples(self.help_key or self.name or "")
+
+
+def _print_examples(key: str) -> None:
+    """Print the examples panel for the entry filed under ``key``, if it has examples."""
+    entry = COMMANDS.get(key) or SUBCOMMANDS.get(key)
+    if entry is not None and entry.examples:
+        console = Console()
+        console.print(examples_panel(entry.examples, console.width))
 
 
 #: Narrowest the description column may get before the examples stack instead.
@@ -131,8 +156,23 @@ def for_command(name: str) -> dict[str, Any]:
     command in :mod:`cli` names where its help lives. A name with no entry is a
     ``KeyError`` at import, which is the point: a new command cannot ship with
     no help at all.
+
+    A command inside a group is named with its group, ``for_command("ai add")``,
+    and its entry lives in :data:`SUBCOMMANDS`. The class handed back is a
+    subclass made for that one command, because Click names a subcommand
+    ``add`` and nothing else, and the examples have to be found by the full key.
     """
-    return {"help": COMMANDS[name].text(), "cls": ExamplesCommand}
+    entry = COMMANDS[name] if name in COMMANDS else SUBCOMMANDS[name]
+    return {"help": entry.text(), "cls": type("ExamplesCommand", (ExamplesCommand,), {"help_key": name})}
+
+
+def for_group(name: str) -> dict[str, Any]:
+    """The ``app.add_typer`` keyword arguments that give a command group its help and examples.
+
+    The group's entry sits in :data:`COMMANDS` beside the plain commands,
+    since ``lw ai`` is typed and listed exactly like one.
+    """
+    return {"help": COMMANDS[name].text(), "cls": type("ExamplesGroup", (ExamplesGroup,), {"help_key": name})}
 
 
 #: Every command's help, keyed by the name it is typed as, in ``lw --help`` order.
@@ -232,6 +272,62 @@ COMMANDS: dict[str, CommandHelp] = {
             ("Everything since the first version", "lw diff order-processor --from first"),
             ("The same comparison as a page in your browser", "lw diff order-processor --html --open"),
             ("Just the summary, without the changed lines", "lw diff order-processor --no-patch"),
+        ),
+    ),
+    "explain": CommandHelp(
+        summary="Explain a change in plain English: what it does, what could break, what to do first.",
+        about="""
+            An AI model reads the comparison `lw diff` would show and writes what
+            the function now does differently, what is worth checking, and a
+            checklist for deploying it. The answer is printed here and added to
+            the HTML report, where every file it mentions opens that file's diff.
+            It is saved, so asking again is instant; --refresh asks the model
+            again.
+
+            Set a model up first with `lw ai add` (Anthropic, OpenAI, Azure OpenAI
+            or a model on your own machine), or just export ANTHROPIC_API_KEY or
+            OPENAI_API_KEY. Your own code is sent with anything that looks like a
+            credential redacted; vendored packages never are. --dry-run prints
+            exactly what would be sent and sends nothing.
+
+            Rate limits, timeouts and dropped connections are retried
+            automatically. If it still fails, the report says why and the same
+            command tries again.
+        """,
+        examples=(
+            ("Explain the newest change", "lw explain order-processor"),
+            ("Explain a particular step", "lw explain order-processor --from 3 --to 4"),
+            ("Ask a different model", "lw explain order-processor --model claude-opus-5-5"),
+            ("Ask again, replacing the saved answer", "lw explain order-processor --refresh"),
+            ("Fill in every step of the history", "lw explain order-processor --all"),
+            ("See exactly what would be sent, and send nothing", "lw explain order-processor --dry-run"),
+            ("Open the report with the explanation in it", "lw explain order-processor --open"),
+        ),
+    ),
+    "ai": CommandHelp(
+        summary="Set up the AI models that explain your changes, and choose when they are used.",
+        about="""
+            Shows which models are set up and how, when run on its own. `lw ai
+            add` walks you through adding one: pick a service, paste a key, pick a
+            model, and it checks the model answers before saving it. Keys are kept
+            in the archive folder, readable only by you.
+
+            Once a model is set up, each new version the watcher archives is
+            explained automatically and its report shows the answer. `lw ai
+            settings` changes that and what is sent; `lw ai off` stops all of it
+            without deleting anything.
+        """,
+        examples=(
+            ("See what is set up", "lw ai"),
+            ("Add a model, answering questions as they come", "lw ai add"),
+            ("Add Claude in one line", "lw ai add anthropic --model claude-sonnet-5"),
+            ("Add an Azure OpenAI deployment",
+             "lw ai add azure --endpoint https://my-resource.openai.azure.com --model gpt-4o"),
+            ("Use a model running on this machine", "lw ai add local --model llama3.1"),
+            ("Switch the default model", "lw ai use claude-haiku-4-5-20251001"),
+            ("Check a model still answers", "lw ai test"),
+            ("Only explain when asked, not automatically", "lw ai settings --no-auto"),
+            ("Stop using AI entirely, keeping your keys", "lw ai off"),
         ),
     ),
     "report": CommandHelp(
@@ -559,6 +655,114 @@ COMMANDS: dict[str, CommandHelp] = {
         examples=(
             ("Rebuild the index", "lw reindex"),
             ("Without the confirmation", "lw reindex --yes"),
+        ),
+    ),
+}
+
+
+#: The help of commands inside a group, keyed by what is typed after ``lw``:
+#: ``"ai add"``. Kept apart from :data:`COMMANDS` so that one stays exactly the
+#: list ``lw --help`` shows.
+SUBCOMMANDS: dict[str, CommandHelp] = {
+    "ai add": CommandHelp(
+        summary="Add an AI model, or replace a saved one's key.",
+        about="""
+            Asks for what it needs as it goes: which service, the API key (typed
+            without showing on screen, or taken from your environment), and which
+            model — listing the ones your key can use. It then sends one tiny
+            request to check the model answers before saving it.
+
+            Everything can be given as options instead, for scripts. Adding a
+            model under a name already saved replaces it, which is how a key is
+            changed. The first model you add becomes the default.
+        """,
+        examples=(
+            ("Be walked through it", "lw ai add"),
+            ("Claude, asking only for the key", "lw ai add anthropic"),
+            ("OpenAI with the key from your environment", "lw ai add openai --key-env OPENAI_API_KEY"),
+            ("An Azure OpenAI deployment",
+             "lw ai add azure --endpoint https://my-resource.openai.azure.com --model gpt-4o"),
+            ("A model served by Ollama on this machine", "lw ai add local --model llama3.1"),
+            ("A second Claude model under its own name",
+             "lw ai add anthropic --model claude-haiku-4-5-20251001 --name quick"),
+        ),
+    ),
+    "ai remove": CommandHelp(
+        summary="Remove a saved model and its key.",
+        about="""
+            Deletes the model and any key saved with it. If it was the default,
+            the next saved model takes over; with none left, nothing is explained
+            until `lw ai add` is run again.
+        """,
+        examples=(
+            ("Remove a model", "lw ai remove claude-sonnet-5"),
+            ("Without the question", "lw ai remove quick --yes"),
+        ),
+    ),
+    "ai use": CommandHelp(
+        summary="Make a saved model the default.",
+        about="""
+            The default model is the one `lw explain` asks and the one the watcher
+            explains new versions with. Any unique part of a model's name works.
+        """,
+        examples=(
+            ("Switch to another saved model", "lw ai use quick"),
+        ),
+    ),
+    "ai test": CommandHelp(
+        summary="Check that a model still answers.",
+        about="""
+            Sends the smallest possible request and says how long the answer
+            took, or what went wrong and what to do about it. Tests the default
+            model unless you name one.
+        """,
+        examples=(
+            ("Test the default model", "lw ai test"),
+            ("Test one in particular", "lw ai test quick"),
+            ("Test every saved model", "lw ai test --all"),
+        ),
+    ),
+    "ai on": CommandHelp(
+        summary="Turn AI explanations back on after `lw ai off`.",
+        about="""
+            Everything saved before `lw ai off` — models, keys and settings — is
+            used again from the next version the watcher archives. No restart is
+            needed.
+        """,
+        examples=(
+            ("Turn it back on", "lw ai on"),
+        ),
+    ),
+    "ai off": CommandHelp(
+        summary="Stop using AI entirely, without deleting any models or keys.",
+        about="""
+            Nothing is sent anywhere while it is off, `lw explain` refuses, and
+            reports stop mentioning AI. The running watcher notices straight away.
+            `lw ai on` undoes it.
+        """,
+        examples=(
+            ("Turn it off", "lw ai off"),
+        ),
+    ),
+    "ai settings": CommandHelp(
+        summary="Choose when explanations are written and what is sent.",
+        about="""
+            On its own, shows every setting, what it means and how to change it.
+            --no-auto stops explaining new versions as they arrive, so it only
+            happens when you run `lw explain`. --no-send-code sends only the shape
+            of a change — files, dependencies, environment variables, services —
+            and never a line of your code.
+
+            --retries, --timeout and --max-prompt-kb tune how hard a request tries
+            and how much of a large change it includes; 0 means the service's own
+            default.
+        """,
+        examples=(
+            ("See every setting", "lw ai settings"),
+            ("Only explain when asked", "lw ai settings --no-auto"),
+            ("Never send code, only the shape of a change", "lw ai settings --no-send-code"),
+            ("Try harder on a busy service", "lw ai settings --retries 8"),
+            ("Wait longer for a slow local model", "lw ai settings --timeout 900"),
         ),
     ),
 }

@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .analysis import analyse
 from .config import Config
@@ -36,6 +37,9 @@ from .utils import (
     short_hash,
     utc_now_iso,
 )
+
+if TYPE_CHECKING:
+    from .ai.run import Explainer
 
 
 @dataclass
@@ -141,15 +145,29 @@ def recently_written(mtime: float, max_age: float) -> bool:
 class Ingestor:
     """Runs the pipeline. Safe to call repeatedly from a single thread."""
 
-    def __init__(self, cfg: Config, db: Database, store: Store | None = None) -> None:
-        """Bind the pipeline to a config, an index and (optionally) a store.
+    def __init__(
+        self, cfg: Config, db: Database, store: Store | None = None, explainer: Explainer | None = None
+    ) -> None:
+        """Bind the pipeline to a config, an index and (optionally) a store and an explainer.
 
         The store is constructed from ``cfg`` when not supplied, which also creates
         the archive directories.
+
+        ``explainer`` is what writes AI explanations of new versions, off this
+        thread — see :class:`~lambda_watcher.ai.run.Explainer`. Without one, no
+        version is explained as it arrives, whatever the AI settings say:
+        ``lw backfill`` importing two years of history should not quietly make
+        two hundred paid requests, so only ``lw watch`` and ``lw ingest`` pass
+        one.
         """
         self.cfg = cfg
         self.db = db
         self.store = store or Store(cfg)
+        self.explainer = explainer
+        #: Whether the reports this ingestor writes mention AI at all. The demo
+        #: turns it off: its sample function is not in the user's archive, so
+        #: the ``lw explain`` a report would offer could never find it.
+        self.ai_in_reports = True
 
     # -- public API ------------------------------------------------------
     def is_candidate(self, path: Path) -> bool:
@@ -461,14 +479,28 @@ class Ingestor:
 
         Rendering is a convenience, never a reason to fail an ingest that has
         already succeeded: every failure here is logged and swallowed.
+
+        This is also where a new version is handed to the AI explainer, when
+        there is one and the settings ask for it (see
+        :meth:`~lambda_watcher.ai.settings.AISettings.auto_entry`). The pair is
+        marked pending *before* the pages are written, so the report goes out
+        saying "being written" and reloads itself into the answer, rather than
+        going out bare and being silently replaced later. A failure to queue it
+        takes the mark back off.
         """
         if not self.cfg.report.auto_diff or previous is None:
             return None, None, None
         # Deferred: the renderer pulls in the whole presentation layer, and an
         # ingest with reports switched off should not pay for the import.
+        from .ai.explanation import clear_pending, save_pending
+        from .ai.report import panel_for
+        from .ai.run import ExplainJob
+        from .ai.settings import AISettings
         from .diffing import diff_from_index
         from .diffing.render_html import write_html
 
+        job: ExplainJob | None = None
+        current = None
         try:
             current = self.db.get_version(function_id, seq)
             if current is None:
@@ -477,15 +509,28 @@ class Ingestor:
                 self.db, self.store, self.cfg.diff, name, previous, current,
                 include_vendor=True if self.cfg.report.include_vendor else None,
             )
+            panel = None
+            if self.ai_in_reports:
+                settings = AISettings.load(self.cfg.root)
+                entry = settings.auto_entry() if self.explainer is not None else None
+                if entry is not None:
+                    save_pending(self.store, diff.a_meta, diff.b_meta, entry.label)
+                    job = ExplainJob(function_id, diff)
+                panel = panel_for(self.store, diff, settings)
             target_dir = self.cfg.reports_dir / slug
             target_dir.mkdir(parents=True, exist_ok=True)
             target = target_dir / f"v{int(previous['seq']):04d}-v{seq:04d}.html"
             # Both pages sit in reports/<slug>/, one level under the archive
             # index that _render_archive_index rewrites right after this.
-            write_html(diff, target, archive_href="../index.html")
-            write_html(diff, target_dir / "latest.html", archive_href="../index.html")
+            write_html(diff, target, archive_href="../index.html", ai=panel)
+            write_html(diff, target_dir / "latest.html", archive_href="../index.html", ai=panel)
+            if job is not None and self.explainer is not None:
+                self.explainer.submit(job)
+                job = None
         except Exception as exc:                       # noqa: BLE001 - never fail an ingest
             LOG.warning("could not render the report for %s v%04d: %s", name, seq, exc)
+            if job is not None and current is not None:
+                clear_pending(self.store, dict(previous), dict(current))
             return None, None, None
         return target, diff.headline(), diff.impact_line()
 
@@ -505,7 +550,7 @@ class Ingestor:
         try:
             from .diffing import write_archive_index
 
-            write_archive_index(self.db, self.cfg.reports_dir)
+            write_archive_index(self.db, self.cfg.reports_dir, store=self.store)
         except Exception as exc:                       # noqa: BLE001 - never fail an ingest
             LOG.warning("could not rewrite the report index: %s", exc)
 

@@ -7,14 +7,21 @@ attach to a change ticket, or send to a colleague.
 from __future__ import annotations
 
 import html
+import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from ..ai.explanation import PENDING_STALE_SECONDS
 from ..utils import format_ts, human_size, read_text, rename_label, signed, slugify
 from . import icons, intraline
+
+if TYPE_CHECKING:
+    from ..ai.explanation import Explanation
+    from ..ai.report import AIPanel
 from .intraline import EDIT_CONTEXT
 from .compare import FileChange, MoveGroup, VersionDiff
 from .highlight import highlight, highlight_lines, language_of
@@ -47,6 +54,9 @@ CSS = """
      both are literal values, and the eye reads them as the same thing. */
   --tk-c: #8b8f97; --tk-k: #a626a4; --tk-s: #50a14f; --tk-n: #986801;
   --tk-t: #986801; --tk-f: #4078f2; --tk-y: #0184bc;
+  /* What a model wrote wears its own colour, so it is never mistaken for
+     something the diff engine measured. */
+  --ai: #6b4fd8; --ai-wash: #f5f2ff; --ai-edge: #e3dbfd;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -59,6 +69,7 @@ CSS = """
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 0 0 1px rgba(255, 255, 255, .01);
     --tk-c: #7f848e; --tk-k: #c678dd; --tk-s: #98c379; --tk-n: #d19a66;
     --tk-t: #d19a66; --tk-f: #61afef; --tk-y: #56b6c2;
+    --ai: #b3a1ff; --ai-wash: #1d1834; --ai-edge: #372d63;
   }
 }
 * { box-sizing: border-box; }
@@ -460,6 +471,111 @@ body.dragging, body.dragging .sheet { transition: none; }
   .file .body[hidden] { display: block; }
 }
 .hidden { display: none !important; }
+
+/* ---- the AI summary --------------------------------------------------- */
+/* The card a model's explanation is drawn in. It sits above the numbers
+   because it is the one part of the page written as sentences — the part to
+   read first — and it is tinted violet throughout so nothing in it is ever
+   taken for a measurement. Every file it mentions is a button that opens that
+   file's diff, so a claim is one click from the lines it is about. */
+.card.ai { border-color: var(--ai-edge); overflow: hidden; }
+.card.ai > .sec-head { background: var(--ai-wash); border-bottom: 1px solid var(--ai-edge); }
+.card.ai h2 { color: var(--ai); }
+.ai-mark { color: var(--ai); font-size: 15px; line-height: 1; }
+.ai-body { padding: 16px 20px 6px; }
+.ai-headline { font-size: 17px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.4;
+  margin: 0 0 8px; color: var(--text); }
+.ai-summary { margin: 0 0 10px; color: var(--text); max-width: 78ch; white-space: pre-wrap; }
+.ai-why { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.ai-cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 8px 28px;
+  margin-top: 6px; }
+.ai-cols.single { grid-template-columns: minmax(0, 1fr); }
+.ai-block h3 { font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--faint); margin: 12px 0 8px; display: flex; align-items: center; gap: 8px; }
+.ai-list { list-style: none; margin: 0 0 8px; padding: 0; }
+.ai-list li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0;
+  border-top: 1px solid var(--rule); }
+.ai-list li:first-child { border-top: none; padding-top: 2px; }
+.ai-list .chip { min-width: 98px; justify-content: flex-start; margin-top: 1px; }
+.ai-block h3 .count { text-transform: none; letter-spacing: 0; }
+.ai-list .what { min-width: 0; }
+.ai-list b { font-weight: 600; }
+.ai-list p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.ai-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ai-file { font: 500 11.5px/1.5 var(--mono); padding: 1px 8px; border-radius: 6px; cursor: pointer;
+  background: var(--sunken); border: 1px solid var(--border); color: var(--text);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-file:hover { border-color: var(--ai); color: var(--ai); }
+.ai-file:focus-visible { outline: 2px solid var(--ai); outline-offset: 1px; }
+span.ai-file { cursor: default; }
+span.ai-file:hover { border-color: var(--border); color: var(--text); }
+.chip.risk-high, .chip.k-security, .chip.k-removal { background: var(--del-gutter); color: var(--del-fg); }
+.chip.risk-medium, .chip.k-config, .chip.k-dependency { background: var(--warn-bg); color: var(--warn-fg); }
+.chip.risk-low, .chip.k-feature { background: var(--add-gutter); color: var(--add-fg); }
+.chip.k-fix, .chip.k-behaviour { background: var(--accent-wash); color: var(--accent); }
+.chip.ai-chip { background: var(--ai-wash); color: var(--ai); }
+.ai-check { list-style: none; margin: 0 0 8px; padding: 0; }
+.ai-check li { padding: 5px 0; }
+.ai-check label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.ai-check input { margin: 3px 0 0; accent-color: var(--ai); width: 15px; height: 15px; flex: 0 0 auto; }
+.ai-check input:checked + span { color: var(--faint); text-decoration: line-through; }
+.ai-foot { padding: 10px 20px 12px; border-top: 1px solid var(--rule); background: var(--panel);
+  color: var(--faint); font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px 14px;
+  align-items: center; }
+.ai-foot .grow { flex: 1 1 320px; }
+.cmdcopy { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.cmdcopy .cmd { overflow: hidden; text-overflow: ellipsis; }
+.copy { font: 600 11.5px/1.4 var(--sans); padding: 3px 9px; border-radius: 6px; cursor: pointer;
+  background: var(--card); color: var(--muted); border: 1px solid var(--border); white-space: nowrap; }
+.copy:hover { color: var(--ai); border-color: var(--ai); }
+.copy.copied { color: var(--add-fg); border-color: var(--add-fg); }
+/* A card with nothing written yet is one line: what would appear, and the
+   command that makes it. It sits under the numbers, not over them, since it
+   is an offer rather than an answer. */
+.ai-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 14px 20px; }
+.ai-offer .grow { flex: 1 1 360px; color: var(--muted); }
+.ai-offer .grow b { color: var(--text); font-weight: 600; }
+.ai-offer .cmds { display: flex; flex-direction: column; gap: 6px; }
+.ai-status { padding: 12px 20px; border-bottom: 1px solid var(--ai-edge); background: var(--panel);
+  color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.ai-status.bad { background: var(--warn-bg); color: var(--warn-fg); border-bottom-color: var(--warn-edge); }
+.card.ai.failed { border-color: var(--warn-edge); }
+.card.ai.failed > .sec-head { background: var(--warn-bg); border-bottom-color: var(--warn-edge); }
+.card.ai.failed h2, .card.ai.failed .ai-mark { color: var(--warn-fg); }
+/* While an explanation is being written the mark pulses, so an open page
+   visibly has something coming rather than looking finished and sparse. */
+.ai-wait .ai-mark { animation: ai-pulse 1.4s ease-in-out infinite; }
+@keyframes ai-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+.ai-late .ai-wait-on { display: none; }
+.ai-wait-late, .ai-offer .cmds.ai-wait-late { display: none; }
+.ai-late .ai-wait-late { display: inline; }
+.ai-late .ai-offer .cmds.ai-wait-late { display: flex; }
+.cmds .step { color: var(--faint); font-size: 11.5px; font-weight: 600; width: 14px;
+  display: inline-block; }
+/* The model's one-line note on a file, under its path in the list and in the
+   sheet's heading. */
+.row .path, .sheet-title .path { flex-wrap: wrap; row-gap: 2px; }
+.ai-note { flex-basis: 100%; padding-left: 25px; color: var(--muted); font-size: 12.5px;
+  line-height: 1.45; font-family: var(--sans); }
+.ai-note::before { content: "✦ "; color: var(--ai); }
+.ai-line { margin-top: 3px; color: var(--muted); font-size: 12.5px; white-space: normal; }
+.ai-line::before { content: "✦ "; color: var(--ai); }
+.ai-line .chip { margin-left: 6px; vertical-align: 1px; }
+@media (max-width: 860px) {
+  .ai-cols { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .ai-body, .ai-foot, .ai-offer, .ai-status { padding-left: 16px; padding-right: 16px; }
+  .ai-list li { flex-direction: column; gap: 4px; }
+  .ai-list .chip { min-width: 0; align-self: flex-start; }
+  .ai-note { padding-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-wait .ai-mark { animation: none; }
+}
+@media print {
+  .copy, .ai-offer { display: none !important; }
+}
 """
 
 #: What the page does once it is open: narrow the list, and move one file's diff
@@ -634,6 +750,114 @@ JS = """
       grip.addEventListener('pointerup', drop);
       grip.addEventListener('pointercancel', drop);
     });
+  }
+
+  // ---- the AI summary --------------------------------------------------
+  // Everything below is found by class rather than by id: a page without an
+  // AI card has none of it, and nothing here may assume otherwise.
+
+  // A file named in the explanation opens that file's diff. The row may be
+  // hidden by the filter or the vendored switch, so both are cleared first —
+  // a button that did nothing because of a filter the reader forgot about
+  // would read as a broken link.
+  function blockFor(path) {
+    var exact = null, within = null;
+    files.forEach(function (el) {
+      if (el.getAttribute('data-key') === path) { exact = exact || el; }
+      var tokens = (el.getAttribute('data-path') || '').split(' ');
+      if (!within && tokens.indexOf(path) !== -1) { within = el; }
+    });
+    return exact || within;
+  }
+  Array.prototype.slice.call(document.querySelectorAll('button.ai-file')).forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var file = blockFor(btn.getAttribute('data-open'));
+      if (!file) { return; }
+      if (file.classList.contains('hidden')) {
+        if (search) { search.value = ''; }
+        if (vendorToggle) { vendorToggle.checked = true; }
+        apply();
+      }
+      var row = file.querySelector('.row');
+      if (row && row.scrollIntoView) { row.scrollIntoView({block: 'center'}); }
+      opener = row;
+      show(file, true);
+    });
+  });
+
+  // Copy a command to the clipboard. A page opened from disk is a secure
+  // context in current browsers, but not in every one, so the old
+  // select-and-copy route is kept as the fallback.
+  function copied(btn) {
+    btn.classList.add('copied');
+    btn.textContent = 'Copied';
+    setTimeout(function () { btn.classList.remove('copied'); btn.textContent = 'Copy'; }, 1600);
+  }
+  function copyText(text, btn) {
+    function fallback() {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try { if (document.execCommand('copy')) { copied(btn); } } catch (e) { /* nothing to do */ }
+      document.body.removeChild(area);
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { copied(btn); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+  Array.prototype.slice.call(document.querySelectorAll('button.copy')).forEach(function (btn) {
+    btn.addEventListener('click', function () { copyText(btn.getAttribute('data-copy') || '', btn); });
+  });
+
+  // The deploy checklist keeps its ticks across reloads, keyed by the pair of
+  // versions and by each item's own words: a refreshed explanation that
+  // reorders the list keeps the right boxes ticked, and one that rewrites an
+  // item starts that item afresh.
+  Array.prototype.slice.call(document.querySelectorAll('.ai-check')).forEach(function (list) {
+    var key = list.getAttribute('data-key') || 'lw-ai';
+    var tally = list.parentNode.querySelector('.ai-done');
+    var boxes = Array.prototype.slice.call(list.querySelectorAll('input[type=checkbox]'));
+    var saved = {};
+    try { saved = JSON.parse(window.localStorage.getItem(key) || '{}') || {}; } catch (e) { saved = {}; }
+    function count() {
+      var done = boxes.filter(function (b) { return b.checked; }).length;
+      if (tally) { tally.textContent = done + ' of ' + boxes.length + ' done'; }
+    }
+    boxes.forEach(function (box) {
+      var item = box.getAttribute('data-item') || '';
+      box.checked = !!saved[item];
+      box.addEventListener('change', function () {
+        saved[item] = box.checked;
+        try { window.localStorage.setItem(key, JSON.stringify(saved)); } catch (e) { /* private window */ }
+        count();
+      });
+    });
+    count();
+  });
+
+  // While an explanation is being written the page reloads itself every few
+  // seconds, so the answer appears on a page already open. Never while a
+  // diff is open in the sheet — that would snatch it from under the reader —
+  // and not for ever: past the limit the card says what to type instead.
+  var waiting = document.querySelector('[data-ai-started]');
+  if (waiting) {
+    var started = Date.parse(waiting.getAttribute('data-ai-started'));
+    var limit = parseInt(waiting.getAttribute('data-ai-limit') || '1200', 10) * 1000;
+    var overdue = function () { return isNaN(started) || Date.now() - started > limit; };
+    var tick = function () {
+      if (overdue()) { waiting.classList.add('ai-late'); return; }
+      if (!document.body.classList.contains('sheet-open')) { window.location.reload(); return; }
+      setTimeout(tick, 5000);
+    };
+    // A page opened long after the request began says so at once, rather
+    // than after one more pointless reload.
+    if (overdue()) { waiting.classList.add('ai-late'); } else { setTimeout(tick, 5000); }
   }
 
   apply();
@@ -813,6 +1037,8 @@ def _file_block(
     body: str,
     is_vendor: bool,
     files: int | None = None,
+    key: str = "",
+    note: str = "",
 ) -> str:
     """One row of the file list, carrying the diff the sheet opens when it is clicked.
 
@@ -825,14 +1051,21 @@ def _file_block(
     ``path_key`` is what the filter box matches on: a file's own path and the
     one it was renamed from, or every member path of a move. ``files`` is how
     many files the block is the only entry for, left off when that is one.
+    ``key`` is the one path that names this block, which is how a file button
+    in the AI summary finds the diff it points at. ``note`` is the model's one
+    line about the file, drawn under the path — and so also in the sheet's
+    heading, which is copied from the row.
     """
     extra = f' data-files="{files}"' if files is not None else ""
+    if key:
+        extra += f' data-key="{_esc(key)}"'
+    note_html = f'<span class="ai-note">{_esc(note)}</span>' if note else ""
     return (
         f'<article class="file" data-path="{_esc(path_key)}" '
         f'data-vendor="{1 if is_vendor else 0}"{extra}>'
         '<button class="row" type="button" aria-expanded="false" aria-controls="sheet">'
         f'<span class="chip {_esc(chip_class)}">{_esc(chip_text)}</span>'
-        f'<span class="path">{icon}<span class="p">{title}</span></span>'
+        f'<span class="path">{icon}<span class="p">{title}</span>{note_html}</span>'
         f'<span class="stat-line">{stat}</span>'
         "</button>"
         f'<div class="body" hidden>{body}</div>'
@@ -840,7 +1073,8 @@ def _file_block(
     )
 
 
-def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | None = None) -> str:
+def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | None = None,
+                 ai_note: str = "") -> str:
     """Render one file's change as a list row and the diff table behind it.
 
     A rename is titled as one file with only the moved part written twice
@@ -850,7 +1084,8 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
     The version directories are passed through so the syntax highlighter can
     read the whole file: colouring a hunk correctly means knowing what was
     happening above it, since a line inside a block comment only looks like a
-    comment if you can see where it opened.
+    comment if you can see where it opened. ``ai_note`` is the AI summary's
+    line about this file, when there is one.
     """
     lang = language_of(change.path, change.lang)
     # A rename is one file, not two. Written out in full twice, the two paths
@@ -938,6 +1173,8 @@ def _render_file(change: FileChange, a_root: Path | None = None, b_root: Path | 
         stat=stat,
         body="\n".join(parts),
         is_vendor=change.is_vendor,
+        key=change.path,
+        note=ai_note,
     )
 
 
@@ -1244,6 +1481,197 @@ def _findings_section(diff: VersionDiff) -> str:
                     tone=tone, aside="values are redacted")
 
 
+def _inline_code(text: str) -> str:
+    """Escape prose and set any ```lw …``` span in it as a command: the hints are written that way."""
+    return re.sub(r"`([^`]+)`", r'<span class="cmd">\1</span>', _esc(text))
+
+
+def _copyable(command: str) -> str:
+    """A command set in code type, with a button beside it that copies it.
+
+    The page cannot run anything — it is a file on disk — so the next best
+    thing is making the command one click from the terminal.
+    """
+    return (f'<span class="cmdcopy"><span class="cmd">{_esc(command)}</span>'
+            f'<button type="button" class="copy" data-copy="{_esc(command)}" '
+            f'title="Copy this command">Copy</button></span>')
+
+
+def _file_buttons(paths: list[str], linkable: set[str]) -> str:
+    """The files a point is about, each a button that opens its diff when the page has one.
+
+    A path the page does not list — a vendored file hidden by the switch at
+    build time — is drawn as plain text rather than a button that would do
+    nothing.
+    """
+    if not paths:
+        return ""
+    parts = []
+    for path in paths:
+        if path in linkable:
+            parts.append(f'<button type="button" class="ai-file" data-open="{_esc(path)}" '
+                         f'title="Open the diff of {_esc(path)}">{_esc(path)}</button>')
+        else:
+            parts.append(f'<span class="ai-file" title="{_esc(path)}">{_esc(path)}</span>')
+    return f'<div class="ai-files">{"".join(parts)}</div>'
+
+
+def _provenance(ex: Explanation) -> str:
+    """The footer line saying who wrote an explanation and what it was shown.
+
+    "Written by claude-sonnet-5 (Anthropic) on 2026-09-24 10:02 · from 14 of
+    16 changed files · 2 values redacted". What the model was *not* shown is
+    the part that matters most: an explanation of 3 files out of 40 reads
+    exactly as confidently as one of all 40.
+    """
+    from ..ai.settings import PROVIDERS
+
+    service = PROVIDERS[ex.provider].label if ex.provider in PROVIDERS else ex.provider
+    parts = [f"Written by <b>{_esc(ex.model or ex.model_name or 'a model')}</b>"
+             + (f" ({_esc(service)})" if service else "")
+             + (f" on {_esc(format_ts(ex.created_at))}" if ex.created_at else "")]
+    if not ex.send_code:
+        parts.append("from the structure only — no code was sent")
+    elif ex.files_total and ex.files_sent < ex.files_total:
+        parts.append(f"from {ex.files_sent} of {ex.files_total} changed files"
+                     + (" (the rest left out for length)" if ex.omitted else ""))
+    elif ex.files_total:
+        parts.append(f"from all {ex.files_total} changed file{'s' if ex.files_total != 1 else ''}")
+    if ex.withheld:
+        parts.append(f"{len(ex.withheld)} credential file{'s' if len(ex.withheld) != 1 else ''} withheld")
+    if ex.redactions:
+        parts.append(f"{ex.redactions} credential-like value{'s' if ex.redactions != 1 else ''} "
+                     "redacted before sending")
+    return " · ".join(parts) + ". AI can be wrong — the diffs below are the record."
+
+
+def _explanation_card(panel: AIPanel, ex: Explanation, linkable: set[str]) -> str:
+    """The full card: headline, summary, changes, risks and a checklist that remembers its ticks.
+
+    Changes go on the left and the things to act on — risks, then the
+    checklist — on the right, so on a wide screen the reader sees what
+    happened and what to do about it side by side. A refresh in flight, or one
+    that failed, is a strip across the top: the answer already on screen stays
+    readable either way.
+    """
+    risk = (f'<span class="chip risk-{_esc(ex.risk)}">{_esc(ex.risk)} risk</span>'
+            if ex.risk else "")
+    head = (f'<div class="sec-head"><span class="ai-mark" aria-hidden="true">✦</span>'
+            f'<h2>What changed</h2>{risk}'
+            f'<span class="aside">AI summary</span></div>')
+    strip = ""
+    if panel.state == "pending":
+        strip = (f'<div class="ai-status ai-wait" data-ai-started="{_esc(panel.started_at)}" '
+                 f'data-ai-limit="{PENDING_STALE_SECONDS}">'
+                 f'<span class="ai-wait-on"><span class="ai-mark">✦</span> A fresh summary is being '
+                 f'written by {_esc(panel.model)}; this page updates itself when it is ready.</span>'
+                 f'<span class="ai-wait-late">That is taking longer than it should. '
+                 f'{_copyable(panel.command + " --refresh")}</span></div>')
+    elif panel.state == "failed":
+        hint = f" {_inline_code(panel.hint.rstrip('.'))}." if panel.hint else ""
+        strip = (f'<div class="ai-status bad"><span>Writing a fresh summary failed: '
+                 f'{_esc(panel.message.rstrip("."))}.{hint}</span>'
+                 f'{_copyable(panel.command + " --refresh")}</div>')
+
+    body = []
+    if ex.headline:
+        body.append(f'<p class="ai-headline">{_esc(ex.headline)}</p>')
+    if ex.summary and ex.summary != ex.headline:
+        body.append(f'<p class="ai-summary">{_esc(ex.summary)}</p>')
+    if ex.risk_reason:
+        body.append(f'<p class="ai-why">Why {_esc(ex.risk or "this")} risk: {_esc(ex.risk_reason)}</p>')
+
+    left, right = [], []
+    if ex.changes:
+        items = "".join(
+            f'<li><span class="chip k-{_esc(p.kind)}">{_esc(p.kind)}</span><div class="what">'
+            f'<b>{_esc(p.title)}</b>' + (f"<p>{_esc(p.detail)}</p>" if p.detail else "")
+            + _file_buttons(p.files, linkable) + "</div></li>"
+            for p in ex.changes
+        )
+        left.append(f'<div class="ai-block"><h3>Changes</h3><ol class="ai-list">{items}</ol></div>')
+    if ex.risks:
+        items = "".join(
+            f'<li><span class="chip risk-{_esc(p.kind)}">{_esc(p.kind)}</span><div class="what">'
+            f'<b>{_esc(p.title)}</b>' + (f"<p>{_esc(p.detail)}</p>" if p.detail else "")
+            + _file_buttons(p.files, linkable) + "</div></li>"
+            for p in ex.risks
+        )
+        right.append(f'<div class="ai-block"><h3>Worth checking</h3><ul class="ai-list">{items}</ul></div>')
+    if ex.checklist:
+        items = "".join(
+            f'<li><label><input type="checkbox" data-item="{_esc(step)}"><span>{_esc(step)}</span>'
+            "</label></li>"
+            for step in ex.checklist
+        )
+        right.append(f'<div class="ai-block"><h3>Deploy checklist <span class="count ai-done"></span></h3>'
+                     f'<ul class="ai-check" data-key="{_esc(panel.storage_key)}">{items}</ul></div>')
+    if left and right:
+        body.append(f'<div class="ai-cols"><div>{"".join(left)}</div><div>{"".join(right)}</div></div>')
+    elif left or right:
+        body.append(f'<div class="ai-cols single"><div>{"".join(left + right)}</div></div>')
+
+    foot = (f'<div class="ai-foot"><span class="grow">{_provenance(ex)}</span>'
+            f'{_copyable(panel.command + " --refresh")}</div>')
+    return (f'<section class="card ai" id="ai-summary">{head}{strip}'
+            f'<div class="ai-body">{"".join(body)}</div>{foot}</section>')
+
+
+def _ai_cards(panel: AIPanel | None, diff: VersionDiff) -> tuple[str, str]:
+    """The AI card for a comparison page, as ``(above the numbers, below them)``.
+
+    An answer — or one on its way, or one that failed — goes above the stats
+    rail, because a paragraph of plain English is what a reader should meet
+    first. An *offer* to write one goes below: it is not an answer, and a page
+    should not open on a suggestion. At most one of the two is ever non-empty,
+    and both are empty when AI is switched off.
+    """
+    if panel is None:
+        return "", ""
+    linkable = {c.path for c in diff.files} | {c.old_path for c in diff.files if c.old_path}
+    if panel.explanation is not None and not panel.explanation.is_empty:
+        return _explanation_card(panel, panel.explanation, linkable), ""
+    mark = '<span class="ai-mark" aria-hidden="true">✦</span>'
+    if panel.state == "pending":
+        model = f" by {_esc(panel.model)}" if panel.model else ""
+        return (
+            f'<section class="card ai ai-wait" id="ai-summary" data-ai-started="{_esc(panel.started_at)}" '
+            f'data-ai-limit="{PENDING_STALE_SECONDS}"><div class="ai-offer">{mark}<div class="grow">'
+            f'<span class="ai-wait-on"><b>A plain-English summary of this change is being written'
+            f'{model}.</b> This page reloads itself when it is ready — usually within a minute.</span>'
+            f'<span class="ai-wait-late"><b>This is taking longer than it should.</b> The request may '
+            f'have been interrupted; the command beside this tries again.</span></div>'
+            f'<div class="cmds ai-wait-late">{_copyable(panel.command)}</div></div></section>',
+            "",
+        )
+    if panel.state == "failed":
+        hint = f" {_inline_code(panel.hint.rstrip('.'))}." if panel.hint else ""
+        model = f" ({_esc(panel.model)})" if panel.model else ""
+        return (
+            f'<section class="card ai failed" id="ai-summary"><div class="sec-head">{mark}'
+            f'<h2>The AI summary could not be written</h2><span class="aside">{model}</span></div>'
+            f'<div class="ai-offer"><div class="grow"><b>{_esc(panel.message.rstrip("."))}.</b>{hint} '
+            f'The diff below is complete; only the summary is missing.</div>'
+            f'<div class="cmds">{_copyable(panel.command)}</div></div></section>',
+            "",
+        )
+    if panel.state == "missing":
+        return "", (
+            f'<section class="card ai" id="ai-summary"><div class="ai-offer">{mark}<div class="grow">'
+            f'<b>Get this change explained in plain English.</b> A model reads the diff below and '
+            f'writes what the function now does differently, what could break, and what to do '
+            f'before deploying.</div><div class="cmds">{_copyable(panel.command)}</div></div></section>'
+        )
+    return "", (
+        f'<section class="card ai" id="ai-summary"><div class="ai-offer">{mark}<div class="grow">'
+        f'<b>Want this change explained in plain English?</b> Set up a model once — Anthropic, '
+        f'OpenAI, Azure OpenAI, or one running on your own machine — then explain this change. '
+        f'<span class="dim"><span class="cmd">lw ai off</span> hides this.</span></div>'
+        f'<div class="cmds"><span><span class="step">1</span>{_copyable("lw ai add")}</span>'
+        f'<span><span class="step">2</span>{_copyable(panel.command)}</span></div></div></section>'
+    )
+
+
 #: Without the script the sheet can never open, so the diffs sit under their own
 #: rows instead and the controls that would do nothing are taken off the page.
 NOSCRIPT = """
@@ -1251,6 +1679,7 @@ NOSCRIPT = """
 .row { cursor: default; }
 .row::after { display: none; }
 .file .body[hidden] { display: block; }
+.copy { display: none; }
 """
 
 
@@ -1368,6 +1797,7 @@ def render_html(
     *,
     archive_href: str | None = None,
     history_href: str | None = None,
+    ai: AIPanel | None = None,
 ) -> str:
     """Render the full report as a single HTML document.
 
@@ -1382,22 +1812,28 @@ def render_html(
     front page and this function's history, relative to where the page is
     being written. Callers pass them only where they know those pages sit;
     left out, the crumbs are plain text.
+
+    ``ai`` is the page's AI card, from :func:`~lambda_watcher.ai.report.panel_for`:
+    an explanation with its per-file notes, one on its way, one that failed,
+    or an offer to write one. ``None`` leaves AI off the page entirely.
     """
     versions = f"v{diff.a_seq:04d} → v{diff.b_seq:04d}"
     title = f"{diff.function_name} · {versions}"
     a_when = format_ts(diff.a_meta.get("ingested_at"))
     b_when = format_ts(diff.b_meta.get("ingested_at"))
+    notes = ai.explanation.file_notes if ai is not None and ai.explanation is not None else {}
+    ai_top, ai_offer = _ai_cards(ai, diff)
 
     blocks: list[str] = []
     for row in diff.file_rows():
         if not isinstance(row, MoveGroup):
-            blocks.append(_render_file(row, diff.a_root, diff.b_root))
+            blocks.append(_render_file(row, diff.a_root, diff.b_root, notes.get(row.path, "")))
             continue
         # The group block reports the move; it has no room for a diff, so the
         # members that were rewritten on the way keep their own blocks after it.
         blocks.append(_render_move(row))
         blocks.extend(
-            _render_file(c, diff.a_root, diff.b_root) for c in row.edited_members
+            _render_file(c, diff.a_root, diff.b_root, notes.get(c.path, "")) for c in row.edited_members
         )
     vendor_toggle = (
         '<label class="switch"><input type="checkbox" id="vendor" checked>'
@@ -1436,7 +1872,9 @@ def render_html(
     </div>
   </header>
 
+  {ai_top}
   {_stats(diff)}
+  {ai_offer}
   {_findings_section(diff)}
   {_context_section(diff)}
   {_dep_table(diff)}
@@ -1463,20 +1901,41 @@ def write_html(
     *,
     archive_href: str | None = None,
     history_href: str | None = None,
+    ai: AIPanel | None = None,
 ) -> Path:
     """Render the diff and write it to ``path``, creating parent directories.
 
     Returns the path so callers can print it. This is what the background
     ingest calls to leave ``reports/<function>/latest.html`` sitting there
-    before anyone thinks to ask what changed. The two hrefs are passed straight
-    to :func:`render_html`, relative to ``path``.
+    before anyone thinks to ask what changed. The hrefs and the AI card are
+    passed straight to :func:`render_html`.
+
+    Written beside the target and renamed over it: a page that is open while
+    an explanation is being written reloads itself every few seconds, and a
+    reload landing halfway through a plain rewrite would show half a page. The
+    scratch name carries the thread as well as the process, because the
+    watcher's ingest thread and its explainer can rewrite ``latest.html`` at
+    the same moment.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        render_html(diff, generated_by, archive_href=archive_href, history_href=history_href),
-        encoding="utf-8",
-    )
+    page = render_html(diff, generated_by, archive_href=archive_href, history_href=history_href, ai=ai)
+    scratch = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        scratch.write_text(page, encoding="utf-8")
+        os.replace(scratch, path)
+    finally:
+        scratch.unlink(missing_ok=True)
     return path
+
+
+def _ai_line(entry: dict[str, Any]) -> str:
+    """The AI headline for one row of the history or the archive index, with its risk. Empty without one."""
+    headline = entry.get("ai_headline")
+    if not headline:
+        return ""
+    risk = entry.get("ai_risk")
+    chip = f'<span class="chip risk-{_esc(risk)}">{_esc(risk)} risk</span>' if risk else ""
+    return f'<div class="ai-line">{_esc(headline)}{chip}</div>'
 
 
 def render_timeline(
@@ -1489,9 +1948,11 @@ def render_timeline(
     """Index page: every archived version of one function, newest first.
 
     ``versions`` entries carry the per-version stats plus ``diff_href`` /
-    ``diff_summary`` describing the step from the previous version.
-    ``archive_href`` links the top bar back to the archive's front page, when
-    the caller knows where that is.
+    ``diff_summary`` describing the step from the previous version, and
+    ``ai_headline`` / ``ai_risk`` when that step has been explained — which
+    turns the history into a list of what each release *did*, not only how
+    many files it touched. ``archive_href`` links the top bar back to the
+    archive's front page, when the caller knows where that is.
     """
     rows: list[str] = []
     for entry in versions:
@@ -1502,6 +1963,7 @@ def render_timeline(
             if href
             else '<span class="dim">first version</span>'
         )
+        step += _ai_line(entry)
         label = (f' <span class="chip label">{_esc(entry["label"])}</span>'
                  if entry.get("label") else "")
         rows.append(
@@ -1578,6 +2040,7 @@ def render_archive_index(
         if entry.get("history_href"):
             change += (f' <span class="dim">·</span> '
                        f'<a href="{_esc(entry["history_href"])}">full history</a>')
+        change += _ai_line(entry)
         rows.append(
             "<tr>"
             f'<td><span class="fn-name">{_esc(name)}</span></td>'
